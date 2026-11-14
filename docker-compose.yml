@@ -1,0 +1,221 @@
+services:
+  # 1. BASE DE DATOS (PostgreSQL + pgvector)
+  postgres-db:
+    image: pgvector/pgvector:pg16
+    container_name: postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin123}
+      POSTGRES_DB: ${POSTGRES_DB:-gestion_personas}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-gestion_personas}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. AUTENTICACIÓN SSO ROBLE (Uninorte)
+  ms-auth:
+    build:
+      context: ./backend
+      dockerfile: ms-auth/Dockerfile
+    container_name: ms-auth
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # 3. MICROSERVICIOS CRUD DE PERSONAS
+  ms-person-create:
+    build:
+      context: ./backend
+      dockerfile: ms-person-create/Dockerfile
+    container_name: ms-person-create
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      - LOGS_SERVICE_URL=http://ms-logs:8000
+      - AUTH_SERVICE_URL=http://ms-auth:8000
+    volumes:
+      - uploads_data:/app/uploads  # Persistencia local para fotos (máx 2MB)
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      ms-logs:
+        condition: service_started
+    networks:
+      - app-network
+
+  ms-person-update:
+    build:
+      context: ./backend
+      dockerfile: ms-person-update/Dockerfile
+    container_name: ms-person-update
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      - LOGS_SERVICE_URL=http://ms-logs:8000
+      - AUTH_SERVICE_URL=http://ms-auth:8000
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      ms-logs:
+        condition: service_started
+    networks:
+      - app-network
+
+  ms-person-delete:
+    build:
+      context: ./backend
+      dockerfile: ms-person-delete/Dockerfile
+    container_name: ms-person-delete
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      - LOGS_SERVICE_URL=http://ms-logs:8000
+      - AUTH_SERVICE_URL=http://ms-auth:8000
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      ms-logs:
+        condition: service_started
+    networks:
+      - app-network
+
+
+  # 4. MICROSERVICIO DE CONSULTA AISLADO (Habilitable bajo demanda)
+  ms-person-query:
+    build:
+      context: ./backend
+      dockerfile: ms-person-query/Dockerfile
+    container_name: ms-person-query
+    # Sin restart automático obligatorio para facilitar apagado/encendido manual
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      - LOGS_SERVICE_URL=http://ms-logs:8000
+      - AUTH_SERVICE_URL=http://ms-auth:8000
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # 5. MICROSERVICIO DE AUDITORÍA Y LOGS
+  ms-logs:
+    build:
+      context: ./backend
+      dockerfile: ms-logs/Dockerfile
+    container_name: ms-logs
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      - AUTH_SERVICE_URL=http://ms-auth:8000
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # 6. AUTOMATIZACIÓN & RAG (n8n Self-Hosted)
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost/n8n/
+      - N8N_PATH=/n8n/
+      - GENERIC_TIMEZONE=America/Bogota
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres-db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-gestion_personas}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-admin}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-admin123}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # 7. MODELO DE IA LOCAL
+  # Levantar con: docker compose --profile local-ai up -d
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["local-ai"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-network
+
+  # 8. FRONTEND (React + Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=/api/v1
+    networks:
+      - app-network
+
+  # 9. API GATEWAY (Nginx Reverse Proxy)
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: nginx-gateway
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - uploads_data:/usr/share/nginx/html/uploads:ro  # Sirve las fotos subidas
+    depends_on:
+      - frontend
+      - ms-auth
+      - ms-person-create
+      - ms-person-update
+      - ms-person-delete
+      - ms-logs
+      - n8n
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+  n8n_data:
+  uploads_data:
+  ollama_data:
+
+networks:
+  app-network:
+    driver: bridge
