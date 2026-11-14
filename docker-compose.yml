@@ -12,6 +12,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - app-network
     healthcheck:
@@ -20,7 +21,53 @@ services:
       timeout: 5s
       retries: 5
 
-  # 2. AUTENTICACIÓN SSO ROBLE (Uninorte)
+  db-migrate:
+    build:
+      context: ./backend
+      dockerfile: ms-person-create/Dockerfile
+    container_name: db-migrate
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # 2. MODELO DE IA LOCAL
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ollama-pull
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama pull ${OLLAMA_LLM_MODEL:-llama3.2}
+        ollama pull ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # 3. AUTENTICACIÓN SSO ROBLE (Uninorte)
   ms-auth:
     build:
       context: ./backend
@@ -36,7 +83,7 @@ services:
     networks:
       - app-network
 
-  # 3. MICROSERVICIOS CRUD DE PERSONAS
+  # 4. MICROSERVICIOS CRUD DE PERSONAS
   ms-person-create:
     build:
       context: ./backend
@@ -99,7 +146,7 @@ services:
       - app-network
 
 
-  # 4. MICROSERVICIO DE CONSULTA AISLADO (Habilitable bajo demanda)
+  # 5. MICROSERVICIO DE CONSULTA AISLADO (Habilitable bajo demanda)
   ms-person-query:
     build:
       context: ./backend
@@ -117,7 +164,7 @@ services:
     networks:
       - app-network
 
-  # 5. MICROSERVICIO DE AUDITORÍA Y LOGS
+  # 6. MICROSERVICIO DE AUDITORÍA Y LOGS
   ms-logs:
     build:
       context: ./backend
@@ -134,7 +181,7 @@ services:
     networks:
       - app-network
 
-  # 6. AUTOMATIZACIÓN & RAG (n8n Self-Hosted)
+  # 7. AUTOMATIZACIÓN & RAG (n8n Self-Hosted)
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     container_name: n8n
@@ -160,19 +207,6 @@ services:
     depends_on:
       postgres-db:
         condition: service_healthy
-    networks:
-      - app-network
-
-  # 7. MODELO DE IA LOCAL
-  # Levantar con: docker compose --profile local-ai up -d
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    profiles: ["local-ai"]
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
     networks:
       - app-network
 
