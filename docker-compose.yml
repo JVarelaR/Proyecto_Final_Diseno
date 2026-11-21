@@ -1,3 +1,7 @@
+# Orquestación de todos los contenedores. `docker compose up -d --build` levanta
+# el sistema completo; cada `service` es un contenedor con su propia imagen.
+# Las dependencias con `condition` garantizan que las migraciones terminen
+# antes de que los microservicios empiecen a consultar las tablas.
 services:
   # 1. BASE DE DATOS (PostgreSQL + pgvector)
   postgres-db:
@@ -11,7 +15,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      # Volumen con nombre: los datos sobreviven a `docker compose down`.
       - postgres_data:/var/lib/postgresql/data
+      # init.sql crea la BD `n8n_db` para los metadatos del workflow.
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - app-network
@@ -21,53 +27,24 @@ services:
       timeout: 5s
       retries: 5
 
+  # 2. MIGRACIONES ALEMBIC (se ejecuta una vez antes de los microservicios)
   db-migrate:
     build:
       context: ./backend
       dockerfile: ms-person-create/Dockerfile
     container_name: db-migrate
+    # Contenedor de un solo uso: aplica la migración inicial y termina.
     command: ["alembic", "upgrade", "head"]
     env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
     depends_on:
       postgres-db:
         condition: service_healthy
     networks:
       - app-network
 
-  # 2. MODELO DE IA LOCAL
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - app-network
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  ollama-pull:
-    image: ollama/ollama:latest
-    container_name: ollama-pull
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama pull ${OLLAMA_LLM_MODEL:-llama3.2}
-        ollama pull ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    depends_on:
-      ollama:
-        condition: service_healthy
-    networks:
-      - app-network
-
-  # 3. AUTENTICACIÓN SSO ROBLE (Uninorte)
+  # 3. AUTENTICACIÓN SSO ROBLE (o modo mock)
   ms-auth:
     build:
       context: ./backend
@@ -76,10 +53,12 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - DATABASE_URL=postgresql://admin:admin123@postgres-db:5432/gestion_personas
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin123}@postgres-db:5432/${POSTGRES_DB:-gestion_personas}
     depends_on:
       postgres-db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     networks:
       - app-network
 
@@ -92,14 +71,18 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
-      - LOGS_SERVICE_URL=http://ms-logs:8000
-      - AUTH_SERVICE_URL=http://ms-auth:8000
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      LOGS_SERVICE_URL: http://ms-logs:8000
+      AUTH_SERVICE_URL: http://ms-auth:8000
+      UPLOAD_DIR: /app/uploads
     volumes:
-      - uploads_data:/app/uploads  # Persistencia local para fotos (máx 2MB)
+      # El mismo volumen se monta en los servicios que escriben y en el gateway.
+      - uploads_data:/app/uploads
     depends_on:
       postgres-db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       ms-logs:
         condition: service_started
     networks:
@@ -113,14 +96,17 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
-      - LOGS_SERVICE_URL=http://ms-logs:8000
-      - AUTH_SERVICE_URL=http://ms-auth:8000
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      LOGS_SERVICE_URL: http://ms-logs:8000
+      AUTH_SERVICE_URL: http://ms-auth:8000
+      UPLOAD_DIR: /app/uploads
     volumes:
       - uploads_data:/app/uploads
     depends_on:
       postgres-db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       ms-logs:
         condition: service_started
     networks:
@@ -134,33 +120,38 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
-      - LOGS_SERVICE_URL=http://ms-logs:8000
-      - AUTH_SERVICE_URL=http://ms-auth:8000
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      LOGS_SERVICE_URL: http://ms-logs:8000
+      AUTH_SERVICE_URL: http://ms-auth:8000
     depends_on:
       postgres-db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       ms-logs:
         condition: service_started
     networks:
       - app-network
 
-
-  # 5. MICROSERVICIO DE CONSULTA AISLADO (Habilitable bajo demanda)
+  # 5. MICROSERVICIO DE CONSULTA AISLADO (habilitable/deshabilitable)
   ms-person-query:
     build:
       context: ./backend
       dockerfile: ms-person-query/Dockerfile
     container_name: ms-person-query
-    # Sin restart automático obligatorio para facilitar apagado/encendido manual
+    # Sin restart automático: se enciende/apaga manualmente (prueba de R7).
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
-      - LOGS_SERVICE_URL=http://ms-logs:8000
-      - AUTH_SERVICE_URL=http://ms-auth:8000
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      LOGS_SERVICE_URL: http://ms-logs:8000
+      AUTH_SERVICE_URL: http://ms-auth:8000
     depends_on:
       postgres-db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      ms-logs:
+        condition: service_started
     networks:
       - app-network
 
@@ -173,11 +164,13 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
-      - AUTH_SERVICE_URL=http://ms-auth:8000
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
+      AUTH_SERVICE_URL: http://ms-auth:8000
     depends_on:
       postgres-db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     networks:
       - app-network
 
@@ -186,39 +179,45 @@ services:
     image: docker.n8n.io/n8nio/n8n:latest
     container_name: n8n
     restart: unless-stopped
-    ports:
-      - "5678:5678"
+    # No se expone el puerto 5678: todo el acceso pasa por el gateway (/n8n/),
+    # donde se aplica basic auth. Así no se puede eludir la protección.
+    env_file: .env
     environment:
-      - N8N_HOST=${N8N_HOST:-localhost}
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - WEBHOOK_URL=http://localhost/n8n/
-      - N8N_PATH=/n8n/
-      - GENERIC_TIMEZONE=America/Bogota
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres-db
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-gestion_personas}
-      - DB_POSTGRESDB_USER=${POSTGRES_USER:-admin}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-admin123}
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_PATH: /n8n/
+      WEBHOOK_URL: http://localhost/n8n/
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-America/Bogota}
+      # Metadatos de n8n en su propia BD; los datos de personas se consultan
+      # desde el workflow con una credencial separada a gestion_personas.
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres-db
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n_db
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-admin}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-admin123}
     volumes:
       - n8n_data:/home/node/.n8n
-      - ./n8n/workflows:/home/node/.n8n/workflows
+      - ./n8n/workflows:/home/node/.n8n/workflows:ro
     depends_on:
       postgres-db:
         condition: service_healthy
     networks:
       - app-network
 
-  # 8. FRONTEND (React + Vite)
+  # 8. FRONTEND (React + Vite) — perfil `ui`, no requerido para el backend
   frontend:
+    # Con `profiles`, no arranca en el `up` normal; se activa con
+    # `docker compose --profile ui up frontend` (ver @no_ui en nginx.conf).
+    profiles: ["ui"]
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: frontend
     restart: unless-stopped
     environment:
-      - VITE_API_URL=/api/v1
+      VITE_API_URL: /api/v1
     networks:
       - app-network
 
@@ -231,10 +230,10 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    env_file: .env   # N8N_USER / N8N_PASSWORD → htpasswd del entrypoint
     volumes:
-      - uploads_data:/usr/share/nginx/html/uploads:ro  # Sirve las fotos subidas
+      - uploads_data:/usr/share/nginx/html/uploads:ro
     depends_on:
-      - frontend
       - ms-auth
       - ms-person-create
       - ms-person-update
@@ -248,7 +247,6 @@ volumes:
   postgres_data:
   n8n_data:
   uploads_data:
-  ollama_data:
 
 networks:
   app-network:

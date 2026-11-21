@@ -1,0 +1,240 @@
+{
+  "name": "RAG - Consulta de Personas",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [-900, 300],
+      "webhookId": "chat-rag-consulta-personas"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_EMBED_MODEL, input: $json.chatInput, dimensions: Number($env.OPENROUTER_EMBED_DIMENSIONS) }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Embed pregunta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const vector = $json.data[0].embedding;\nconst literal = '[' + vector.join(',') + ']';\nconst sql = \"SELECT p.numero_documento, p.primer_nombre, p.segundo_nombre, p.apellidos, p.fecha_nacimiento, 1 - (pe.embedding <=> '\" + literal + \"'::vector) AS similitud FROM persona_embeddings pe JOIN personas p ON p.numero_documento = pe.numero_documento ORDER BY pe.embedding <=> '\" + literal + \"'::vector LIMIT 5\";\nreturn [{ json: { sql } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "SQL vectorial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-420, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Buscar similares",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-180, 300],
+      "credentials": {
+        "postgres": {
+          "id": "__POSTGRES_CREDENTIAL_ID__",
+          "name": "gestion_personas"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "(SELECT 'mas_joven' AS tipo, primer_nombre, segundo_nombre, apellidos, fecha_nacimiento FROM personas ORDER BY fecha_nacimiento DESC LIMIT 1) UNION ALL (SELECT 'mas_mayor' AS tipo, primer_nombre, segundo_nombre, apellidos, fecha_nacimiento FROM personas ORDER BY fecha_nacimiento ASC LIMIT 1)",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Agregados",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [60, 300],
+      "credentials": {
+        "postgres": {
+          "id": "__POSTGRES_CREDENTIAL_ID__",
+          "name": "gestion_personas"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pregunta = $('Chat Trigger').first().json.chatInput;\nconst similares = $('Buscar similares').all().map((item) => item.json);\nconst agregados = $('Agregados').all().map((item) => item.json);\nconst contexto = JSON.stringify({ similares, agregados }, null, 2);\nreturn [{ json: { pregunta, contexto } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Armar contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_LLM_MODEL, messages: [ { role: 'system', content: 'Eres un asistente de gestión de datos personales. Responde en español, de forma breve y usando SOLO el contexto proporcionado. Si el contexto no contiene la respuesta, di que no hay información suficiente.' }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ] }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "LLM OpenRouter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "asg-texto-respuesta",
+              "name": "texto",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Preparar respuesta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [780, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ms-auth:8000/api/v1/auth/service-token",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Service-Key", "value": "={{ $env.SERVICE_API_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "Token de servicio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1020, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ms-logs:8000/api/v1/logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.access_token }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tipo_transaccion: 'RAG_QUERY', detalle: { pregunta: $('Armar contexto').first().json.pregunta, respuesta: $('Preparar respuesta').first().json.texto } }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000010",
+      "name": "Registrar RAG_QUERY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1260, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "asg-texto-final",
+              "name": "text",
+              "value": "={{ $('Preparar respuesta').first().json.texto }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000011",
+      "name": "Respuesta al chat",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1500, 300]
+    }
+  ],
+  "connections": {
+    "Chat Trigger": {
+      "main": [[{ "node": "Embed pregunta", "type": "main", "index": 0 }]]
+    },
+    "Embed pregunta": {
+      "main": [[{ "node": "SQL vectorial", "type": "main", "index": 0 }]]
+    },
+    "SQL vectorial": {
+      "main": [[{ "node": "Buscar similares", "type": "main", "index": 0 }]]
+    },
+    "Buscar similares": {
+      "main": [[{ "node": "Agregados", "type": "main", "index": 0 }]]
+    },
+    "Agregados": {
+      "main": [[{ "node": "Armar contexto", "type": "main", "index": 0 }]]
+    },
+    "Armar contexto": {
+      "main": [[{ "node": "LLM OpenRouter", "type": "main", "index": 0 }]]
+    },
+    "LLM OpenRouter": {
+      "main": [[{ "node": "Preparar respuesta", "type": "main", "index": 0 }]]
+    },
+    "Preparar respuesta": {
+      "main": [[{ "node": "Token de servicio", "type": "main", "index": 0 }]]
+    },
+    "Token de servicio": {
+      "main": [[{ "node": "Registrar RAG_QUERY", "type": "main", "index": 0 }]]
+    },
+    "Registrar RAG_QUERY": {
+      "main": [[{ "node": "Respuesta al chat", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
