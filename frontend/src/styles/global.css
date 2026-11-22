@@ -1,0 +1,55 @@
+/* Estilos globales de la SPA. Importa los tokens de marca, fija la base visual y define el foco visible exigido por accesibilidad. */
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--gd-gray-100);
+  color: var(--gd-brown-deeper);
+}
+
+/* Botones primarios con el acento de la marca (mismo criterio que el
+   bootstrap-theme.css del proyecto de origen). */
+.btn-primary {
+  --bs-btn-bg: var(--gd-accent-deep);
+  --bs-btn-border-color: var(--gd-accent-deep);
+  --bs-btn-hover-bg: var(--gd-accent-deep-hover);
+  --bs-btn-hover-border-color: var(--gd-accent-deep-hover);
+  --bs-btn-active-bg: #8f4217;
+  --bs-btn-active-border-color: #8f4217;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: var(--gd-accent-deep);
+  --bs-btn-border-color: var(--gd-accent-deep);
+  --bs-btn-hover-bg: var(--gd-accent-deep);
+  --bs-btn-hover-border-color: var(--gd-accent-deep);
+}
+
+/* Foco visible para navegación con teclado (WCAG 2.4.7). */
+:focus-visible {
+  outline: 3px solid var(--gd-accent);
+  outline-offset: 2px;
+}
+
+/* No hay animaciones decorativas hoy, pero la base queda preparada para que
+   cualquier transición futura respete la preferencia del sistema (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

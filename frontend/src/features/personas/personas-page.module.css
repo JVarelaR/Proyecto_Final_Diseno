@@ -1,0 +1,66 @@
+/* Estilos compartidos de los paneles de personas. Conserva la jerarquía visual del backoffice de origen con variables gd. */
+.encabezado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.titulo {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.descripcion {
+  margin: 0.25rem 0 0;
+  color: var(--gd-gray-600);
+}
+
+.busqueda {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem;
+  max-width: 640px;
+}
+
+.busquedaCampo {
+  flex: 1 1 220px;
+}
+
+.detalle {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.campo {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.etiqueta {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gd-gray-600);
+}
+
+.valor {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.foto {
+  width: 88px;
+  height: 88px;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  border: 1px solid var(--gd-gray-300);
+}

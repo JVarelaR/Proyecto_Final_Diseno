@@ -2,185 +2,523 @@
 GUÍA DE LECTURA DEL CÓDIGO — Gestión de Datos Personales
 ================================================================================
 
-Público objetivo: alguien que entiende Programación Orientada a Objetos (clases,
-objetos, herencia, métodos) pero NUNCA ha trabajado con FastAPI, SQLAlchemy,
-Docker ni n8n. Los comentarios del código están escritos con ese mismo criterio:
-explican el PORQUÉ de cada decisión y traducen los conceptos nuevos a analogías
-de POO. No es necesario leerlo todo de una vez: sigue el orden de esta guía.
+Propósito de este archivo: servir de recorrido instructivo desde el PRIMER archivo
+que conviene abrir hasta entender el sistema completo. Está pensado para alguien
+que sabe Programación Orientada a Objetos (clases, objetos, herencia, métodos)
+pero nunca ha trabajado con FastAPI, SQLAlchemy, Docker, React ni n8n.
 
+Regla de uso: no pases al paso siguiente hasta poder responder la pregunta que
+abre el paso actual. Cada paso termina con una comprobación. Los términos nuevos
+se explican la primera vez que aparecen y se comparan con conceptos de POO.
 
---------------------------------------------------------------------------------
-1. GLOSARIO MÍNIMO (léelo antes de abrir archivos)
---------------------------------------------------------------------------------
+Ruta recomendada: 0 → 12 (unas 5–6 horas la primera vez). Para repasar, salta
+directo al paso 3 (datos), 5 (auth) u 8 (CRUD).
 
-Microservicio      Una aplicación pequeña e independiente con una responsabilidad.
-                   Aquí cada opción del menú es un contenedor distinto (rúbrica).
-Gateway            "Fachada": único punto de entrada (Nginx, puerto 80). La SPA
-                   y n8n llaman SOLO al gateway, nunca a un microservicio.
-Endpoint           Un método HTTP (GET/POST/PUT/DELETE) asociado a una URL.
-Depends            Inyección de dependencias de FastAPI. En POO pasarías un
-                   colaborador por el constructor; aquí el framework construye
-                   el objeto (sesión de BD, usuario, token) y se lo pasa ya listo
-                   a la función. Por eso los parámetros tienen `= Depends(...)`.
-APIRouter(prefix=) Un "controlador" que agrupa rutas bajo una URL base. El
-                   prefijo debe coincidir EXACTAMENTE con gateway/nginx.conf.
-Pydantic           Librería de validación. Un `BaseModel` es como un objeto con
-                   setters que validan: si el dato no cumple, lanza error y
-                   FastAPI responde 422 sin entrar a tu código.
-async / await      Programación asíncrona. Mientras se espera la base de datos o
-                   una API externa, el servidor atiende otras peticiones. En POO
-                   sería como no quedarse bloqueado esperando a un colaborador.
-ORM (SQLAlchemy)   Traduce clases Python a tablas SQL. `Persona` es una clase;
-                   cada instancia es una fila; `db.add()` prepara el INSERT.
-Migración          Control de versiones de la BD (Alembic). Nunca se edita una
-                   migración ya aplicada: se crea una nueva con `revision`.
-JWT / Bearer       Un "pase" firmado. El login devuelve un token; el frontend lo
-                   envía en la cabecera `Authorization: Bearer <token>`. Todos
-                   los endpoints protegidos lo verifican con get_current_user.
-Embedding          Lista de números que representa el SIGNIFICADO de un texto.
-                   Textos parecidos -> vectores cercanos. 768 números aquí.
-pgvector           Extensión de Postgres que guarda vectores y permite buscar
-                   por similitud (distancia coseno) con el índice HNSW.
-RAG                retrieval-augmented generation: buscar fragmentos parecidos
-                   a la pregunta y dárselos al LLM para que responda con datos
-                   reales en vez de inventarlos. El chat vive en n8n.
+================================================================================
+0. GLOSARIO MÍNIMO (léelo antes de abrir archivos)
+================================================================================
 
+Microservicio     Una aplicación pequeña e independiente con una responsabilidad.
+                  En POO sería una clase con un único propósito, desplegada en su
+                  propio contenedor. Aquí cada opción del menú vive separada.
 
---------------------------------------------------------------------------------
-2. ORDEN DE LECTURA (de qué archivo a qué archivo)
---------------------------------------------------------------------------------
+Gateway           "Fachada" del sistema: Nginx en el puerto 80. La SPA y n8n hablan
+                  SOLO con él, nunca con un microservicio. En POO sería la clase
+                  pública que esconde la complejidad de las clases internas.
 
-PASO 0 — EL MAPA
-  0.1  contexto.md, secciones 1 a 5
-       Enunciado, rúbrica de 50 puntos, arquitectura y reglas innegociables.
-       Es la fuente de verdad: si algo difiere del código, se avisa y se corrige.
-  0.2  docker-compose.yml (leer solo los comentarios y los nombres de servicio)
-       Da el inventario de contenedores: BD, migraciones, 5 microservicios,
-       n8n, frontend (perfil `ui`) y gateway.
+Endpoint          Un método HTTP (GET/POST/PUT/DELETE) asociado a una URL.
+                  GET /api/v1/query/123 es "llama al método consultar con 123".
 
-PASO 1 — LAS REGLAS DE DATOS (antes de ver endpoints)
-  1.1  backend/shared/schemas.py
-       Las 10 reglas del formulario (Pydantic). Zod debe replicarlas en el
-       frontend. Fíjate en `field_validator` y en `_parse_fecha_nacimiento`.
-  1.2  backend/shared/models.py
-       Las 4 tablas: `personas`, `transaccion_logs`, `persona_embeddings` y
-       `roble_token_storage`. Es la contrapartida ORM de la migración.
+Depends           Inyección de dependencias de FastAPI. En POO pasarías un
+                  colaborador por el constructor; aquí el framework construye la
+                  sesión de BD, el usuario o el token y se lo pasa ya listo al
+                  endpoint. Por eso los parámetros llevan `= Depends(...)`.
 
-PASO 2 — INFRAESTRUCTURA COMPARTIDA
-  2.1  backend/shared/database.py
-       Una sola sesión asíncrona (`get_db`) para todos los servicios.
-  2.2  backend/shared/security.py
-       `get_current_user` (quién eres) y `get_access_token` (reenviar el Bearer).
-       SECURITY: aquí empieza la cadena de autenticación de TODA petición.
-  2.3  backend/shared/log_client.py
-       Cómo se registra un evento en ms-logs y por qué va ANTES del commit.
-  2.4  backend/shared/uploads.py
-       Cómo se guarda la foto en el volumen compartido.
+APIRouter(prefix=) Un "controlador" que agrupa rutas bajo una URL base. Su prefijo
+                  debe coincidir EXACTAMENTE con un `location` de nginx.conf.
 
-PASO 3 — AUTENTICACIÓN
-  3.1  backend/ms-auth/app/main.py
-       Rutas: /signup, /login, /verify-token, /service-token, /logout.
-  3.2  backend/ms-auth/app/roble_client.py
-       Modo mock vs SDK ROBLE real; firma del JWT y verificación de sesión.
-       SECURITY:JWT_SECRET_KEY y ROBLE_CONTRACT_ID solo viven en el entorno.
-  3.3  backend/shared/roble_storage.py (la excepción síncrona documentada)
+Pydantic          Validación de datos en Python. Un `BaseModel` es como un objeto
+                  con setters que validan: si el dato no cumple, lanza error y
+                  FastAPI responde 422 sin entrar a tu función.
 
-PASO 4 — AUDITORÍA
-  4.1  backend/ms-logs/app/main.py
-       POST /api/v1/logs y GET con filtros por tipo, documento y rango de fechas.
+Zod               El equivalente en TypeScript/React. Define el mismo esquema en
+                  el navegador para dar feedback antes de llamar al backend.
 
-PASO 5 — CRUD (en orden de complejidad creciente)
-  5.1  backend/ms-person-query/app/main.py  — el más simple: SELECT + log READ.
-       Es el contenedor aislado (R7); al pararlo, solo esta ruta da 503.
-  5.2  backend/ms-person-delete/app/main.py — DELETE + log, borrado en cascada.
-  5.3  backend/ms-person-create/app/main.py — formulario + foto + log CREATE +
-       indexación vectorial (mejor esfuerzo).
-  5.4  backend/ms-person-update/app/main.py — igual que create pero con
-       reindexado (borra el vector viejo y crea uno nuevo) + log UPDATE.
+ORM (SQLAlchemy)  Traduce clases Python a tablas SQL. `Persona` es la clase, cada
+                  instancia es una fila y `db.add(objeto)` prepara un INSERT.
 
-PASO 6 — IA Y BÚSQUEDA
-  6.1  backend/shared/embedding_client.py
-       768 dimensiones fijas; `texto_para_embedding` incluye la fecha de nacimiento
-       para poder responder "¿quién es el más joven?" (pregunta oficial).
-  6.2  n8n/workflows/rag_consulta_personas.json
-       JSON: no admite comentarios. El flujo es:
-       pregunta -> embedding (Ollama / nomic-embed-text) -> búsqueda coseno en pgvector ->
-       LLM (qwen2.5:0.5b) -> POST /api/v1/logs (RAG_QUERY con pregunta y
-       respuesta) -> respuesta en el chat. Se explica también en contexto.md §6.
+Migración         Control de versiones de la BD con Alembic. Nunca se edita una
+                  migración ya aplicada: se crea una nueva revisión.
 
-PASO 7 — EL GATEWAY
-  7.1  gateway/nginx.conf
-       Cada `location /api/v1/...` apunta a un upstream distinto. Fíjate en:
-       - sin barra final en los `location` de API (evita bucles 301/307);
-       - `resolver 127.0.0.11` + `proxy_pass` variable (R7);
-       - `/n8n/` con barra final y basic auth (SECURITY).
-  7.2  gateway/proxy.conf  — cabeceras y timeouts comunes.
-  7.3  gateway/entrypoint.sh — genera el htpasswd y arranca Nginx.
+JWT / Bearer      Un "pase" firmado. El login devuelve un token y la SPA lo envía
+                  en la cabecera `Authorization: Bearer <token>`. Es como una
+                  credencial de usuario que no requiere enviar la contraseña en
+                  cada petición.
 
-PASO 8 — BASE DE DATOS Y PRUEBAS
-  8.1  backend/migrations/versions/7daaa620ddca_init_schema_personas_logs_pgvector.py
-       El VECTOR(768), el índice HNSW y las foreign keys.
-  8.2  backend/migrations/env.py — cómo Alembic lee `.env` y la metadata.
-  8.3  backend/tests/test_schemas.py — 12 pruebas de las validaciones.
+Embedding         Lista de 768 números que representa el SIGNIFICADO de un texto.
+                  Textos parecidos producen vectores cercanos.
 
-PASO 9 — ESTADO Y DECISIONES
-  9.1  contexto.md, secciones 6, 8 y 9
-       Detalles del RAG/n8n, proveedor de IA y checklist de la rúbrica.
-  9.2  contexto.md, sección 10
-       Registro de cambios: Última actualización + línea por modificación.
+pgvector          Extensión de PostgreSQL que guarda vectores y busca por similitud
+                  con distancia coseno (`<=>`) e índice HNSW.
 
+RAG               Retrieval-Augmented Generation: buscar fragmentos parecidos a
+                  la pregunta y dárselos al LLM para que responda con datos reales.
+                  El chat vive en n8n, no en React.
 
---------------------------------------------------------------------------------
-3. FLUJO DE UNA PETICIÓN REAL (ejemplo: crear persona)
---------------------------------------------------------------------------------
+Componente / hook Un componente es una "clase visual" reutilizable de React (una
+                  función que devuelve JSX, similar a un `render()`). Un hook es
+                  una función con estado interno, como un método que recuerda datos
+                  entre renders (`useState`, `useAuth`, `useServicio`).
 
-  1. La SPA envía POST /api/v1/create con multipart/form-data y el Bearer.
-  2. Nginx (`location /api/v1/create`) la pasa a ms-person-create:8000.
-  3. FastAPI valida campos con Pydantic (422 si falla) e inyecta por `Depends`:
-     la sesión `get_db`, el `current_user` verificado y el token crudo.
-  4. `shared.security.get_current_user` llama a ms-auth/api/v1/auth/verify-token.
-     Si ms-auth está caído -> 503; si el token es malo -> 401.
-  5. El endpoint construye `PersonaCreate`, comprueba que no exista el documento
-     (409) y llama a `guardar_foto` (si hay foto).
-  6. `db.add(persona)` + `db.flush()` preparan el INSERT sin confirmarlo.
-  7. `registrar_transaccion(token, "CREATE", ...)` llama a ms-logs, que valida
-     el mismo Bearer y escribe la fila en `transaccion_logs`.
-     Si falla -> rollback -> 503. Nunca queda una creación sin auditoría.
-  8. `db.commit()` confirma la persona.
-  9. Se genera el embedding con Ollama y se guarda en `persona_embeddings`.
-     Si Ollama falla, solo se avisa por logger: el CRUD ya terminó bien.
- 10. Se responde 201 con los datos de la persona (sin los campos de control).
+TanStack Query    Gestor de peticiones: guarda resultados en caché, reintenta y
+                  permite recargar. En POO sería un objeto que administra llamadas
+                  remotas y su estado (cargando / error / datos).
 
-El patrón se repite en UPDATE y DELETE; en READ no hay flush porque solo se lee.
+React Hook Form   Formularios: registra campos y valida con Zod antes de enviar.
+                  `register("correo")` conecta el input con el estado del formulario.
 
+Health check      Endpoint `/health` que responde `{"status":"ok"}`. Sirve para
+                  decidir si un panel se muestra o se marca "servicio inactivo".
 
---------------------------------------------------------------------------------
-4. CONVENCIONES QUE NO SE DEBEN ROMPER
---------------------------------------------------------------------------------
+================================================================================
+1. EL MAPA: ¿QUÉ DEBE CONSTRUIR EL SISTEMA Y DÓNDE ESTÁ LA VERDAD?
+================================================================================
 
-- Prefijos de los APIRouter == `location` de gateway/nginx.conf (uno a uno).
-- Toda operación (CREATE/READ/UPDATE/DELETE/RAG_QUERY) registra log. Una
-  operación nueva sin log está incompleta.
-- Reglas de validación IDÉNTICAS en Zod (frontend) y Pydantic (backend).
-- Modelos SOLO desde `shared.models`; BD SOLO con `get_db` de `shared.database`.
-- Esquema SOLO con Alembic (migración nueva, nunca editar una aplicada).
-- La SPA llama solo al gateway; n8n no expone el puerto 5678.
-- SECURITY: secretos en variables de entorno; `.env` está en `.gitignore`.
-  No imprimir tokens ni claves en logs ni en mensajes de error al usuario.
-- Idioma de comentarios, documentación y commits: español. Identificadores en
-  los nombres que ya existen (`numero_documento`, `transaccion_logs`, etc.).
+Archivos:
+  1.1  contexto.md, secciones 1, 2 y 3
+       Enunciado, campos del formulario, validaciones, rúbrica de 50 puntos y
+       mapeo a requisitos RF/RNF. Es la FUENTE DE VERDAD: si el código difiere,
+       se avisa y se corrige el contexto en la misma tarea (ver AGENTS.md §1).
+  1.2  docker-compose.yml (lee primero los comentarios y los nombres de servicio)
+       Inventario real: postgres-db, ollama, ollama-pull, db-migrate, ms-auth,
+       los cinco microservicios de datos, n8n, frontend (perfil `ui`) y gateway.
+  1.3  README.md
+       Resumen operativo: arranque, credenciales de prueba, mapa de rutas y
+       estado frente a la rúbrica.
 
+Qué fijarse:
+  - Las seis opciones del menú y qué contenedor atiende cada una.
+  - La llave de búsqueda es SIEMPRE `numero_documento`. No existe un endpoint
+    de "listar todas las personas".
+  - "Toda transacción" incluye CREATE, READ, UPDATE, DELETE y RAG_QUERY.
 
---------------------------------------------------------------------------------
-5. VERIFICACIÓN RÁPIDA
---------------------------------------------------------------------------------
+Comprobación: sin mirar el texto, nombra las nueve responsabilidades R1–R9 y
+cuántos puntos vale cada una (4, 15, 12, 2, 4, 5, 3, 2, 3).
 
-  docker compose config --quiet                 # sintaxis de Compose
-  docker compose up -d --build                  # levantar todo
-  cd backend && pytest -q                       # 12 pruebas de validación
-  python -m compileall -q shared ms-auth ms-logs ms-person-* migrations tests
-  docker compose stop ms-person-query           # R7: solo /api/v1/query -> 503
-  docker compose start ms-person-query          # restablecer
+================================================================================
+2. LA FACHADA: ¿CÓMO LLEGA UNA PETICIÓN AL CONTENEDOR CORRECTO?
+================================================================================
 
-Estado verificado el 2026-11-21: 9 contenedores, pytest 12 passed, CRUD + logs,
-RAG con la pregunta oficial y subida de foto funcionando. Ver contexto.md §9.
+Archivos:
+  2.1  gateway/nginx.conf
+  2.2  gateway/proxy.conf
+  2.3  gateway/entrypoint.sh
+  2.4  frontend/Dockerfile y frontend/nginx-spa.conf
+
+Qué fijarse:
+  - `upstream` define nombres lógicos (`ms_auth`, `ms_create`, …). Docker resuelve
+    `ms-auth:8000` por DNS interno. En POO sería un mapa nombre → colaborador.
+  - Cada `location /api/v1/...` apunta a un upstream distinto, SIN barra final.
+    Si se pusiera `/api/v1/create/`, Nginx haría 301 y FastAPI devolvería 307 de
+    vuelta: bucle de redirecciones.
+  - `/n8n/` SÍ lleva barra final en `proxy_pass http://n8n_service/;`: así
+    `/n8n/rest/...` llega como `/rest/...`. Sin ella, la API REST caía en el HTML
+    del editor de n8n.
+  - `resolver 127.0.0.11` es el DNS de Docker. Permite que Nginx arranque aunque
+    `frontend` o `ms-person-query` no estén levantados (base de la prueba R7).
+  - `location /api/v1/query` usa `proxy_pass` con variable y `error_page 502 503
+    504 = @query_offline`: devuelve un 503 JSON controlado sin tumbar al resto.
+  - `location /` usa la misma técnica con `@no_ui`: si no levantas el frontend,
+    responde 200 con instrucciones en vez de un 502 feo.
+  - SECURITY: `/n8n/` aplica basic-auth; el htpasswd se genera en `entrypoint.sh`
+    desde `N8N_USER`/`N8N_PASSWORD`. `client_max_body_size 3m` deja subir una foto
+    de hasta 2 MB más el overhead del formulario. `/n8n/` tiene 300 s de timeout
+    de lectura porque el LLM local puede tardar; el resto, 60 s.
+  - El contenedor `frontend` compila la SPA y su propio Nginx escucha en 5173;
+    el gateway lo publica como `/`. Las variables `VITE_*` se sustituyen en BUILD
+    (ARG del Dockerfile + build args de Compose), no en runtime.
+
+Comprobación: explica en voz alta por qué `/api/v1/create` no tiene barra final
+pero `/n8n/` sí, y qué ocurre si `ms-person-query` está detenido.
+
+================================================================================
+3. EL CONTRATO DE DATOS: ¿QUÉ REGLAS SE VALIDAN Y DÓNDE SE REPITEN?
+================================================================================
+
+Archivos (léeos en paralelo, uno al lado del otro):
+  3.1  contexto.md §2.3 — reglas originales del enunciado.
+  3.2  backend/shared/schemas.py — Pydantic v2 (autoridad).
+  3.3  frontend/src/shared/lib/validation.ts — Zod (espejo).
+  3.4  backend/tests/test_schemas.py (12 pruebas) y
+       frontend/src/shared/lib/validation.test.ts (8 pruebas).
+
+Mapa de una regla a su implementación:
+
+  Regla del enunciado      Pydantic                         Zod
+  -----------------------  -------------------------------  ----------------------------
+  Tipo documento (2)       TipoDocumento(str, Enum)         z.enum(TIPOS_DOCUMENTO)
+  Nro. documento ≤10       Field(min_length=1,             .min(1).max(10)
+  y solo dígitos            max_length=10, pattern=…)       .regex(/^\d{1,10}$/)
+  Nombre sin números       @field_validator → _sin_digitos  textoSinDigitos(...)
+  Nombre ≤30 / apellido≤60 Field(max_length=…)              .max(30) / .max(60)
+  Segundo nombre opcional  validator mode="before" → None   z.union([…, z.literal("")])
+  Fecha dd-mmm-yyyy o ISO  _parse_fecha_nacimiento()        fechaValida() + MESES_ES
+  Género (4 valores)       Genero(str, Enum)                z.enum(GENEROS)
+  Correo válido            EmailStr                         .email()
+  Celular exactamente 10   Field(pattern=r"^\d{10}$")       .regex(/^\d{10}$/)
+  Foto ≤2 MB               foto_size + MAX_FOTO_BYTES       File.size + MAX_FOTO_BYTES
+  Filtros de log           LogCreate/LogOut                 filtrosLogSchema (desde ≤ hasta)
+
+Detalles que explican decisiones:
+  - `mode="before"` en Pydantic se ejecuta antes de la validación de tipo: convierte
+    el string vacío del formulario en `None` y la fecha en texto a objeto `date`.
+  - Los meses son en español (`ene`, `feb`, …) por decisión del equipo; el datepicker
+    envía ISO `YYYY-MM-DD` y ambos formatos se aceptan en los dos lenguajes.
+  - En Zod, `refine` devuelve un `ZodEffects` que ya no admite `.min()`/`.max()`;
+    por eso `textoSinDigitos` aplica longitud ANTES y el refine de dígitos al final.
+  - `TipoTransaccion` / `TIPOS_TRANSACCION` deben coincidir: CREATE, READ, UPDATE,
+    DELETE, RAG_QUERY.
+
+Comprobación: cambia mentalmente el celular a 12 dígitos. Deberías saber que hay
+que tocar cuatro sitios: contexto §2.3, schemas.py, validation.ts y ambas suites
+de pruebas. La rúbrica R5 (4 pts) exige que estén en frontend Y backend.
+
+================================================================================
+4. PERSISTENCIA: ¿DÓNDE VIVEN LOS DATOS Y QUIÉN CREA LAS TABLAS?
+================================================================================
+
+Archivos:
+  4.1  backend/shared/database.py
+  4.2  backend/shared/models.py
+  4.3  backend/migrations/versions/7daaa620ddca_init_schema_personas_logs_pgvector.py
+  4.4  backend/migrations/env.py
+
+Qué fijarse:
+  - `get_db` es el ÚNICO engine/sesión asíncrona. Los microservicios lo inyectan;
+    nunca crean su propio `create_async_engine` (AGENTS.md §4). `pool_pre_ping`
+    comprueba que la conexión siga viva tras un reinicio de Postgres.
+  - `Persona` usa `numero_documento` como PRIMARY KEY (no un id autoincremental).
+    `created_at`/`updated_at` los calcula Postgres con `now()`; `foto_url` guarda
+    solo la ruta `/uploads/<archivo>`.
+  - `TransaccionLog.id` se genera en Python con `default=uuid.uuid4` (NO con un
+    DEFAULT de PostgreSQL); `detalle` es JSONB para guardar payloads distintos,
+    incluido `{pregunta, respuesta}` del RAG.
+  - `PersonaEmbedding` es 1:1 con `personas`, FK con `ON DELETE CASCADE` y
+    `embedding VECTOR(768)`. El índice HNSW `ix_persona_embeddings_vector` usa
+    `vector_cosine_ops`, el mismo operador `<=>` que consulta n8n.
+  - `RobleTokenStorage` la crea Alembic; solo la usa el SDK ROBLE.
+  - Nunca se llama a `create_all()`. Si cambia el esquema, se crea una migración
+    nueva; no se edita la de 2026-11-16.
+
+Comprobación: explica por qué la foto no es un BLOB y qué pasa con su vector al
+borrar una persona.
+
+================================================================================
+5. AUTENTICACIÓN: ¿CÓMO SE CONVIERTE UN LOGIN EN UNA PETICIÓN PROTEGIDA?
+================================================================================
+
+Archivos en orden:
+  5.1  backend/ms-auth/app/main.py       — rutas /signup, /login, /verify-token,
+                                          /service-token, /logout, /health.
+  5.2  backend/ms-auth/app/roble_client.py — mock vs SDK ROBLE, firma JWT HS256.
+  5.3  backend/shared/roble_storage.py    — excepción síncrona del SDK.
+  5.4  backend/shared/security.py         — get_current_user y get_access_token.
+  5.5  frontend/src/shared/lib/auth-context.tsx — sesión en sessionStorage.
+  5.6  frontend/src/features/auth/login-page.tsx — formulario público.
+  5.7  frontend/src/shared/lib/api.ts (líneas 66–105) — Bearer y evento 401.
+
+Flujo:
+  SPA /login ──POST /api/v1/auth/login──▶ ms-auth
+      AUTH_MODE=mock  → usuario fijo, contraseña ignorada, JWT HS256 de 7 días
+      AUTH_MODE=roble → SDK oficial + sesión persistida en roble_token_storage
+                     ◀── {access_token, user}
+  SPA guarda `gd_sesion` en sessionStorage (NO localStorage: muere al cerrar pestaña)
+  SPA ──Authorization: Bearer <token>──▶ gateway ──▶ microservicio
+      Depends(get_current_user) ──GET ms-auth/api/v1/auth/verify-token──▶
+          200 → current_user / 401 → "Token inválido" / error de red → 503
+
+Detalles que explican decisiones:
+  - SECURITY: los microservicios NO decodifican el JWT por su cuenta; le preguntan
+    a ms-auth. Así un logout en ROBLE invalida el token aunque la firma siga viva.
+  - `get_access_token` entrega el token crudo para reenviarlo a ms-logs por HTTP.
+  - `POST /service-token` con cabecera `X-Service-Key` es la excepción controlada:
+    lo usa n8n para registrar RAG_QUERY sin credenciales de usuario.
+  - SECURITY: JWT_SECRET_KEY y ROBLE_CONTRACT_ID solo viven en el entorno; si falta
+    el secreto, `roble_client.py` falla al importar (fail fast).
+  - `api.ts` lanza el evento global `gd:unauthorized` cuando ve un 401;
+    `auth-context.tsx` lo escucha, borra `gd_sesion` y devuelve al usuario al login.
+
+Comprobación: ¿por qué un 503 en ms-auth no debe confundirse con un 401? Porque
+503 significa "autoridad caída" y 401 "credencial inválida"; el código los distingue.
+
+================================================================================
+6. COLABORADORES TRANSVERSALES: ¿CÓMO SE REGISTRA, SE INDEXA Y SE GUARDA UNA FOTO?
+================================================================================
+
+Archivos:
+  6.1  backend/shared/log_client.py
+  6.2  backend/shared/embedding_client.py
+  6.3  backend/shared/uploads.py
+
+Qué fijarse:
+  - `registrar_transaccion()` es un adapter HTTP a ms-logs: el microservicio no
+    escribe en `transaccion_logs` directamente. Reenvía el Bearer y lanza error si
+    ms-logs responde ≥400. Por eso los endpoints hacen `flush` → log → `commit`:
+    si el log falla, `rollback` y el usuario recibe 503. Nunca queda una operación
+    sin auditoría (rúbrica R2, 15 pts).
+  - `generar_embedding()` llama a Ollama `/v1/embeddings` con `nomic-embed-text`,
+    fuerza 768 dimensiones y verifica la longitud del vector. Es mejor esfuerzo:
+    create/update solo avisan por `logger.warning` si falla; la persona ya quedó
+    guardada y el CRUD responde 201.
+  - `texto_para_embedding()` incluye nombre, documento, fecha de nacimiento y
+    género con prefijo `search_document:`. La fecha es lo que permite responder
+    "¿quién es el más joven?" (riesgo #1 del contexto).
+  - `guardar_foto()` escribe en el volumen compartido `uploads_data` con un UUID
+    para evitar sobrescrituras; devuelve `/uploads/<uuid>.<ext>`, que Nginx sirve
+    en solo lectura. El límite de 2 MB se valida en Pydantic y en Zod.
+
+Comprobación: ¿qué diferencia hay entre que falle ms-logs y que falle Ollama?
+El primero revierte la operación; el segundo solo degrada la búsqueda semántica.
+
+================================================================================
+7. AUDITORÍA: ¿CÓMO SE CONSULTA EL LOG?
+================================================================================
+
+Archivos:
+  7.1  backend/ms-logs/app/main.py
+  7.2  frontend/src/features/logs/logs-page.tsx
+  7.3  frontend/src/shared/lib/validation.ts (filtrosLogSchema)
+  7.4  frontend/src/shared/components/ui/lista-tarjetas.tsx
+
+Qué fijarse:
+  - `POST /api/v1/logs` también lleva `Depends(get_current_user)`: es escritura
+    protegida, tanto para usuarios como para el JWT de servicio de n8n.
+  - `GET /api/v1/logs` acepta `tipo_transaccion`, `numero_documento`, `fecha_desde`,
+    `fecha_hasta` y `limite` (1–1000, por defecto 100). Construye un `select()`
+    de SQLAlchemy 2.0 y añade `.where()` solo para los filtros presentes: es como
+    armar una consulta por partes, sin concatenar strings de SQL (evita inyección).
+  - `datetime.combine(fecha, time.min/time.max)` convierte un día en rango completo
+    para no perder eventos de las 23:59:59. Ordena por fecha descendente.
+  - `response_model=LogOut` filtra la respuesta aunque el objeto ORM tenga más
+    atributos.
+  - La UI usa los MISMOS nombres de parámetros y valida en Zod que desde ≤ hasta.
+    Los eventos se muestran en cards con badges por tipo.
+
+Comprobación: describe cómo filtrar los eventos `UPDATE` del documento 999888777
+entre dos fechas, primero en la UI y luego en `curl`.
+
+================================================================================
+8. CRUD: ¿CÓMO SE IMPLEMENTA CADA OPCIÓN DEL MENÚ?
+================================================================================
+
+Léelos en este orden (de más simple a más completo):
+
+  Paso 8.1  backend/ms-person-query/app/main.py
+            GET /{documento} → select → 404 si no existe → log READ → PersonaOut.
+            Es el contenedor aislado de R7.
+            `frontend/src/features/personas/consultar-page.tsx` muestra el resultado
+            en una card.
+
+  Paso 8.2  backend/ms-person-delete/app/main.py
+            GET /{documento} → 404 → log DELETE ANTES de borrar → db.delete → 204.
+            Postgres elimina el embedding por ON DELETE CASCADE.
+            frontend/.../borrar-page.tsx + confirmar-modal.tsx exigen confirmación.
+
+  Paso 8.3  backend/ms-person-create/app/main.py
+            Form + File + get_db + get_current_user + get_access_token →
+            PersonaCreate → 409 si existe → guardar_foto → db.add + flush →
+            log CREATE → commit → embedding (mejor esfuerzo) → 201.
+            frontend/.../crear-page.tsx + persona-form-modal.tsx.
+
+  Paso 8.4  backend/ms-person-update/app/main.py
+            Igual que create pero PUT /{documento}. Verifica que la ruta y el
+            formulario tengan el MISMO documento (422 si no), usa `setattr` sobre
+            el objeto ORM, log UPDATE, commit, borra el vector viejo y crea uno
+            nuevo (reindexado), `db.refresh()` antes de responder.
+            frontend/.../actualizar-page.tsx reutiliza el modal de alta.
+
+Componentes frontend que evitan repetir código:
+  - buscar-documento-form.tsx: un solo formulario Zod para los tres paneles que
+    buscan por documento (consultar, actualizar, borrar).
+  - use-consulta-persona.ts: hook con `{persona, error, buscando, buscar, limpiar}`.
+  - lista-tarjetas.tsx: presenta personas y logs con el mismo estilo de cards.
+  - format.ts: fechas legibles y mensajes de error de ApiError.
+
+Códigos HTTP que conviene memorizar:
+  200 operación correcta · 201 creado · 204 borrado sin cuerpo · 401 token inválido
+  · 404 persona no encontrada · 409 documento duplicado · 422 validación
+  · 503 servicio dependiente caído (auth o logs).
+
+Comprobación: tracea mentalmente un CREATE desde que el usuario pulsa "Crear
+persona" hasta que aparece el evento en `/logs`. Debe aparecer el flush antes
+del log y el commit después.
+
+================================================================================
+9. RAG: ¿CÓMO SE RESPONDE EN LENGUAJE NATURAL SIN REIMPLEMENTAR EL CHAT?
+================================================================================
+
+Archivos:
+  9.1  backend/shared/embedding_client.py (ya leído en el paso 6)
+  9.2  n8n/workflows/rag_consulta_personas.json
+  9.3  backend/ms-auth/app/main.py (`/service-token`)
+  9.4  backend/ms-logs/app/main.py (`POST /api/v1/logs`)
+  9.5  frontend/src/features/rag/rag-page.tsx
+  9.6  gateway/nginx.conf (`/n8n/`)
+  9.7  contexto.md §6 y riesgo #1 en §8
+
+El JSON de n8n NO admite comentarios: la tabla `connections` define el orden.
+Los 11 nodos, en orden real:
+
+  1. Chat Trigger        → pregunta del usuario en el widget de n8n.
+  2. Embed pregunta      → Ollama `/v1/embeddings`, prefijo `search_query:`.
+  3. SQL vectorial       → arma el literal del vector y la SQL con similitud
+                           `1 - (pe.embedding <=> '<vector>'::vector)` LIMIT 5.
+  4. Buscar similares    → ejecuta la SQL con la credencial Postgres.
+  5. Agregados           → consulta máximo/mínimo por `fecha_nacimiento`.
+  6. Armar contexto      → quita `similitud`, compone `nombre_mas_joven` y entrega
+                           `{pregunta, contexto}`; recupera la pregunta con
+                           `$('Chat Trigger').first().json.chatInput`.
+  7. LLM Ollama          → `qwen2.5:0.5b`, temperature 0, español, solo contexto.
+  8. Preparar respuesta  → extrae `choices[0].message.content` en `texto`.
+  9. Token de servicio   → `X-Service-Key` → JWT de ms-auth.
+ 10. Registrar RAG_QUERY → POST ms-logs con `{pregunta, respuesta}`.
+ 11. Respuesta al chat   → copia `texto` al campo `text` que espera el widget.
+
+Detalles que explican decisiones:
+  - La pregunta oficial es *"¿Cuál es el empleado más joven que se ha registrado?"*.
+    El texto indexado incluye la fecha y el nodo `Agregados` hace SQL adicional,
+    porque un embedding por sí solo no garantiza un min/max exacto.
+  - SECURITY: n8n no expone el puerto 5678; entra por `/n8n/` con basic-auth del
+    gateway. $env.OLLAMA_* se lee porque `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`.
+  - El panel React `/rag` SOLO comprueba `/n8n/healthz` y abre el webhook real
+    `/n8n/webhook/chat-rag-consulta-personas/chat` en otra pestaña. Un 401 del
+    basic-auth cuenta como "gateway vivo"; un 502/503 como "servicio inactivo".
+    La conversación se ve en n8n porque la rúbrica R3 (12 pts) lo exige.
+
+Comprobación: explica por qué el chat NO está en React y dónde queda registrada
+cada pregunta.
+
+================================================================================
+10. LA SPA: ¿CÓMO SE ENGANCHAN TODOS LOS PANELES?
+================================================================================
+
+Archivos:
+  10.1 frontend/src/main.tsx
+       Proveedores en orden: BrowserRouter → QueryClientProvider → AuthProvider
+       → App. Es el "main" de la aplicación; sin ellos los hooks no existen.
+  10.2 frontend/src/app/App.tsx
+       `RequireAuth` protege el árbol; `Panel` añade el shell; las siete rutas
+       (/dashboard, /crear, /actualizar, /consultar, /rag, /borrar, /logs) viven
+       dentro. `/login` es pública y `*` redirige al dashboard.
+  10.3 frontend/src/shared/components/layout/dashboard-shell.tsx
+       Sidebar de escritorio, Offcanvas móvil, título por ruta y logout. Es la
+       analogía visual del menú de seis opciones del enunciado.
+  10.4 frontend/src/shared/components/ui/estado-servicio.tsx
+       Envuelve cada panel. Si el health falla, sustituye SOLO ese contenido por
+       "servicio inactivo" con botón de reintento. El sidebar sigue navegable.
+  10.5 frontend/src/shared/lib/use-servicio.ts + api.ts (`urlSalud`)
+       Timeout de 4 s, caché de 10 s y refresco cada 30 s. Usa
+       `/api/v1/<servicio>/health` y `/n8n/healthz` para RAG.
+  10.6 frontend/src/features/dashboard/dashboard-page.tsx
+       Tarjetas de acceso a los seis servicios.
+  10.7 frontend/index.html, public/favicon.svg, public/robots.txt,
+       src/styles/global.css, vite.config.ts
+       Idioma `es`, metadatos, tema, foco visible, `prefers-reduced-motion`.
+       `robots.txt` bloquea la indexación a propósito: es un panel tras login.
+
+Comprobación: al detener `ms-person-query`, ¿por qué sigue funcionando `/logs`?
+Porque el router y el shell no dependen de la salud de un microservicio: solo el
+panel envuelto en `ServicioPanel servicio="query"` se sustituye por el aviso.
+
+================================================================================
+11. PRUEBAS AUTOMATIZADAS: ¿CÓMO SE DEMUESTRA QUE LAS REGLAS SIGUEN VIVAS?
+================================================================================
+
+Archivos:
+  11.1 backend/tests/test_schemas.py — 12 pruebas Pytest de Pydantic.
+  11.2 frontend/src/shared/lib/validation.test.ts — 8 pruebas Vitest de Zod.
+  11.3 package.json — scripts `test`, `typecheck` y `build`.
+  11.4 GUIA_PRUEBAS.txt — verificación manual completa (UI, curl, RAG, R7).
+
+Comandos desde la raíz:
+  cd backend && ../.venv/bin/python -m pytest -q && cd ..
+  npm --prefix frontend test
+  npm --prefix frontend run typecheck
+  npm --prefix frontend run build
+  docker compose config --quiet && docker compose --profile ui config --quiet
+
+Pytest es el corredor de Python; Vitest el de Vitest/TypeScript. Ambos comprueban
+las MISMAS reglas del paso 3. Si una prueba falla, no intentes "arreglar" solo un
+lado: la validación espejo es un requisito de la rúbrica.
+
+Comprobación: ejecuta los cuatro comandos. Esperado: 12 passed, 8 passed, sin
+errores de tipado, `dist/` generado y Compose sin salida.
+
+================================================================================
+12. CIERRE: DECISIONES, ESTADO Y MAPA FINAL
+================================================================================
+
+Archivos:
+  12.1 contexto.md §7 — integración ROBLE y patrón de inyección.
+  12.2 contexto.md §8 — 11 riesgos/decisiones, todos resueltos salvo el Data
+       Warehouse de Fase 6 (descartado del bloque backend).
+  12.3 contexto.md §9 — checklist real: R2–R9 en verde; R1 pendiente de contrato
+       ROBLE real; CI en GitHub Actions pendiente.
+  12.4 contexto.md §10 — registro de cambios: fecha, qué y dónde.
+  12.5 AGENTS.md — reglas de sincronización, límites y estilo.
+
+Estado frente a la rúbrica: 46/50 puntos están verificados (R2–R9). Los 4 de R1
+dependen de repetir el flujo con un `ROBLE_CONTRACT_ID` real; hoy se valida en
+`AUTH_MODE=mock`. Fuera de la rúbrica falta CI en GitHub Actions.
+
+Mapa rápido de carpetas:
+
+  contexto.md               verdad: enunciado, rúbrica, decisiones, estado
+  AGENTS.md                 reglas de trabajo del repositorio
+  README.md                 entrada rápida y mapa de documentación
+  docs/arquitectura.md      por qué está así la arquitectura
+  GUIA_LECTURA_CODIGO.txt   este recorrido
+  GUIA_PRUEBAS.txt          cómo probar todo
+  docker-compose.yml        inventario de contenedores y dependencias
+  gateway/                  fachada: nginx.conf, proxy.conf, entrypoint.sh
+  postgres/init.sql         crea la BD n8n_db para metadatos del workflow
+  backend/shared/           BD, modelos, esquemas, seguridad, logs, IA, fotos
+  backend/ms-auth/          SSO ROBLE / mock y JWT
+  backend/ms-logs/          auditoría y consulta filtrada
+  backend/ms-person-*/      una opción del menú por servicio
+  backend/migrations/       esquema versionado con Alembic
+  backend/tests/            pruebas Pydantic
+  n8n/workflows/            workflow RAG versionado (id KTgajEBwgIVpKDRy)
+  frontend/src/app/         rutas y guardia de autenticación
+  frontend/src/features/    una carpeta por pantalla del menú
+  frontend/src/shared/      cliente API, sesión, Zod, componentes comunes
+  frontend/src/styles/      tokens visuales y accesibilidad
+
+================================================================================
+13. AUTOEVALUACIÓN FINAL (respuestas cortadas a propósito)
+================================================================================
+
+1. Tracea un READ desde la card de búsqueda hasta el log.
+   → BuscarDocumentoForm (Zod) → useConsultaPersona → api.consultarPersona →
+     gateway → ms-person-query → get_current_user → select → log READ → card.
+
+2. ¿Por qué el log va antes del commit?
+   → Si ms-logs falla, rollback: no existe una operación sin auditoría.
+
+3. ¿Cómo funciona R7?
+   → DNS dinámico + proxy_pass variable + error_page 503; solo esa ruta cae.
+
+4. Cambias "celular exactamente 10" a 12. ¿Qué tocas?
+   → contexto §2.3, schemas.py, validation.ts, las dos suites de pruebas y el
+     registro de cambios del contexto.
+
+5. ¿Por qué no basta con poner VITE_API_URL en `environment` de Compose?
+   → Vite lo sustituye al compilar; tiene que ser ARG del Dockerfile y build arg.
+
+Si puedes responder las cinco, ya puedes leer, modificar y probar el proyecto sin
+romper los requisitos innegociables de AGENTS.md §2.
+
+Última verificación de esta guía: 2026-11-21, contra el código presente en el
+repositorio (12 pruebas backend, 8 frontend, 11 nodos del workflow y 13 servicios
+definidos en Compose: 11 en ejecución con el perfil `ui` más `ollama-pull` y
+`db-migrate`, que terminan y salen con código 0).

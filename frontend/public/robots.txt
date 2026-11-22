@@ -1,0 +1,3 @@
+# Panel autenticado: no debe aparecer en resultados de búsqueda.
+User-agent: *
+Disallow: /

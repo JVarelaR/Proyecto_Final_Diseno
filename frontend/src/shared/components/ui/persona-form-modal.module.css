@@ -1,0 +1,14 @@
+/* Estilos del formulario de persona. Mantiene la densidad del modal del backoffice de origen con variables de diseño gd. */
+.form {
+  margin: 0;
+}
+
+.cambiarFecha {
+  font-size: 0.8rem;
+  padding: 0 0 0.25rem;
+  text-decoration: none;
+}
+
+.cambiarFecha:hover {
+  text-decoration: underline;
+}

@@ -1,0 +1,47 @@
+/* Estilos del panel de auditoría. Aísla el layout de filtros y cards para no alterar Bootstrap. */
+.filtros {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  max-width: 960px;
+  margin-bottom: 1rem;
+}
+
+@media (min-width: 576px) {
+  .filtros {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 992px) {
+  .filtros {
+    grid-template-columns: 1.2fr 1fr 1fr 1fr auto;
+    align-items: end;
+  }
+}
+
+.detalle {
+  max-height: 10rem;
+  overflow: auto;
+  margin: 0.75rem 0 0;
+  padding: 0.6rem;
+  border-radius: 0.4rem;
+  background-color: var(--gd-gray-100);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.encabezadoTarjeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.fecha {
+  color: var(--gd-gray-600);
+  font-size: 0.8rem;
+}

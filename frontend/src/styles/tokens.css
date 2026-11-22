@@ -1,0 +1,52 @@
+/* Tokens de marca portados del backoffice de Confitería la 7.
+   La paleta se conserva; solo cambia el prefijo (--c7-* → --gd-*) para que
+   el diseño quede integrado en "Gestión de Datos Personales". */
+:root {
+  color-scheme: light;
+
+  --gd-eggshell: #f8f2e7;
+  --gd-gray-100: #fbf8f2;
+  --gd-gray-200: #f4ede2;
+  --gd-gray-300: #e6ddd0;
+  --gd-gray-400: #d3c8b8;
+  --gd-gray-500: #a99b8a;
+  --gd-gray-600: #7a6c5e;
+
+  --gd-brown-light: #a0704a;
+  --gd-brown: #8b5e3c;
+  --gd-brown-dark: #5c4033;
+  --gd-brown-deeper: #3d2a1f;
+
+  --gd-accent: #d97742;
+  --gd-accent-hover: #c4652f;
+  --gd-accent-deep: #b85c24;
+  --gd-accent-deep-hover: #a04c1a;
+  --gd-accent-light: #f0e0d0;
+
+  --gd-success: #2e7d52;
+  --gd-warning: #c68a00;
+  --gd-warning-text: #8a6100;
+  --gd-danger: #b93a2a;
+  --gd-info: #2a6494;
+
+  /* Variables que consumen los componentes de react-bootstrap. */
+  --bs-primary: var(--gd-accent-deep);
+  --bs-primary-rgb: 184, 92, 36;
+  --bs-primary-text-emphasis: #5f2d0e;
+  --bs-primary-bg-subtle: #f9e8d8;
+  --bs-primary-border-subtle: #f0c9a0;
+  --bs-secondary: var(--gd-brown);
+  --bs-secondary-rgb: 139, 94, 60;
+  --bs-success: var(--gd-success);
+  --bs-danger: var(--gd-danger);
+  --bs-warning: var(--gd-warning);
+  --bs-info: var(--gd-info);
+  --bs-link-color: var(--gd-accent-deep-hover);
+  --bs-link-hover-color: #84390f;
+  --bs-body-bg: var(--gd-gray-100);
+  --bs-body-color: var(--gd-brown-deeper);
+  --bs-body-font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --bs-border-color: var(--gd-gray-300);
+  --bs-card-border-color: var(--gd-gray-300);
+  --bs-card-bg: #ffffff;
+}

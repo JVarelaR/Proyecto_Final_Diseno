@@ -1,0 +1,394 @@
+================================================================================
+GUÍA DE PRUEBAS — Gestión de Datos Personales
+================================================================================
+
+Propósito de este archivo: paso a paso para probar TODO lo ya implementado, en el
+mismo orden en que el sistema se pone en marcha. Cada sección dice qué comando
+ejecutar, QUÉ DEBE PASAR y qué hacer si no pasa. Está escrito para ejecutarse desde
+la raíz del repositorio en Linux/macOS con Docker Compose, curl, python3 y openssl.
+
+SEGURIDAD / LÍMITES ANTES DE EMPEZAR:
+  - Nunca ejecutes `docker compose down -v`: borra los volúmenes con datos.
+  - No subas `.env` ni secretos al repositorio (está en .gitignore).
+  - No hagas commit ni push salvo que se pida explícitamente.
+  - Si algo falla, lee el criterio de éxito antes de "arreglar" código: muchos
+    estados (401 en n8n, contenedores de un solo uso Exited, SEO 63) son esperados.
+
+================================================================================
+0. PREPARAR EL ENTORNO (5 min)
+================================================================================
+
+0.1 Comprobar requisitos:
+  docker --version
+  docker compose version
+  curl --version
+  python3 --version
+  openssl version
+
+  Puertos 80 y 5432 deben estar libres. Ollama descarga dos modelos en el primer
+  arranque: conviene tener ~4 GB de RAM libres y paciencia en esa primera vez.
+
+0.2 Crear el archivo de secretos (si aún no existe):
+  cp .env.example .env
+
+0.3 Generar los valores que pide el sistema y PEGARLOS en `.env` con un editor:
+  openssl rand -hex 32      # → JWT_SECRET_KEY (obligatorio; si falta, ms-auth no arranca)
+  openssl rand -hex 32      # → SERVICE_API_KEY (lo usa n8n para pedir token de servicio)
+
+  Para el owner de n8n, elige primero N8N_PASSWORD (o deja el default) y genera:
+  export N8N_PASSWORD='cambiar_clave_n8n'
+  htpasswd -bnBC 10 "" "$N8N_PASSWORD" | tr -d ':\n'
+  Copia el resultado en N8N_INSTANCE_OWNER_PASSWORD_HASH.
+  IMPORTANTE: en `.env`, sustituye cada `$` del hash por `$$` (Compose lo interpola).
+
+0.4 Comprobar que `.env` quedó coherente:
+  grep -E '^(AUTH_MODE|JWT_SECRET_KEY|SERVICE_API_KEY|N8N_USER|N8N_PASSWORD|N8N_INSTANCE_OWNER_PASSWORD_HASH|VITE_API_URL|VITE_N8N_CHAT_URL)=' .env
+
+  Criterio de éxito: AUTH_MODE=mock, secretos NO vacíos, VITE_API_URL=/api/v1 y
+  VITE_N8N_CHAT_URL=/n8n/webhook/chat-rag-consulta-personas/chat.
+
+================================================================================
+1. PRUEBAS ESTÁTICAS (sin levantar contenedores, 3 min)
+================================================================================
+
+Desde la raíz:
+
+  docker compose config --quiet && echo "COMPOSE OK"
+  docker compose --profile ui config --quiet && echo "COMPOSE+UI OK"
+
+  cd backend && ../.venv/bin/python -m pytest -q && cd ..
+  npm --prefix frontend test
+  npm --prefix frontend run typecheck
+  npm --prefix frontend run build
+
+  Criterio de éxito:
+    - Compose: dos "OK", sin mensajes de error.
+    - Backend: `12 passed`.
+    - Frontend: `8 passed` (validation.test.ts), `tsc --noEmit` sin salida y
+      `dist/` generado con los assets `index-*.js` / `index-*.css`.
+
+  Si `.venv` no existe, instala primero las dependencias de `backend/requirements-common.txt`
+  y las de cada microservicio, o usa `python -m pytest` con un entorno que las tenga.
+
+================================================================================
+2. LEVANTAR EL SISTEMA (5–15 min la primera vez)
+================================================================================
+
+  docker compose up -d --build
+  docker compose --profile ui up -d --build frontend
+  docker compose ps
+
+  Criterio de éxito: `postgres-db` y `ollama` en healthy; `gateway`, `ms-auth`,
+  los cinco microservicios de datos, `n8n` y `frontend` en Up. `ollama-pull` y
+  `db-migrate` aparecerán como "Exited (0)" porque son contenedores de un solo uso:
+  ESO ES CORRECTO. Si no, revisa:
+
+  docker compose logs --tail=80 ollama-pull
+  docker compose logs --tail=80 db-migrate
+  docker compose logs --tail=80 gateway
+
+  La primera descarga de modelos puede tardar varios minutos. create/update y n8n
+  esperan a que `ollama-pull` termine (condition: service_completed_successfully).
+
+================================================================================
+3. HEALTH CHECKS Y FACHADA (3 min)
+================================================================================
+
+  for ruta in /api/v1/auth/health /api/v1/create/health /api/v1/update/health \
+              /api/v1/delete/health /api/v1/query/health /api/v1/logs/health; do
+    printf '%-32s ' "$ruta"
+    curl -sS -o /dev/null -w '%{http_code}\n' "http://localhost$ruta"
+  done
+
+  printf 'n8n sin credenciales: '
+  curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/n8n/healthz
+  printf 'n8n con credenciales: '
+  curl -sS -u "${N8N_USER:-admin}:${N8N_PASSWORD:-cambiar_clave_n8n}" \
+       -o /dev/null -w '%{http_code}\n' http://localhost/n8n/healthz
+
+  for ruta in / /favicon.svg /robots.txt; do
+    printf '%-16s ' "$ruta"
+    curl -sS -o /dev/null -w '%{http_code}\n' "http://localhost$ruta"
+  done
+
+  Criterio de éxito:
+    - Los seis `/api/v1/.../health` devuelven 200 con JSON `{"status":"ok"}`.
+    - `/n8n/healthz` sin credenciales devuelve 401 (basic-auth del gateway: es
+      buena señal, significa que el gateway responde); con credenciales, 200.
+    - `/`, `/favicon.svg` y `/robots.txt` devuelven 200.
+    - Si `/` devuelve el JSON "Backend listo. La interfaz se activa con…", significa
+      que el perfil `ui` no se levantó. Repite el paso 2 con `--profile ui`.
+
+================================================================================
+4. LOGIN Y PROPAGACIÓN DEL BEARER (4 min)
+================================================================================
+
+4.1 Login por API:
+
+  curl -sS -X POST http://localhost/api/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"usuario.mock@uninorte.edu.co","password":"mock123"}'
+
+  Criterio: JSON con `access_token`, `token_type: bearer` y `user.email` igual al
+  correo enviado. En `AUTH_MODE=mock` cualquier correo válido y cualquier contraseña
+  funcionan; el password no se comprueba.
+
+4.2 Guardar el token en una variable de shell (NO lo imprimas completo):
+
+  TOKEN=$(curl -sS -X POST http://localhost/api/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"usuario.mock@uninorte.edu.co","password":"mock123"}' \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+  echo "Token obtenido (prefijo): ${TOKEN:0:12}…"
+
+4.3 Verificar el token y un fallo controlado:
+
+  curl -sS -H "Authorization: Bearer $TOKEN" \
+    http://localhost/api/v1/auth/verify-token
+  printf 'Token inválido → '
+  curl -sS -o /dev/null -w '%{http_code}\n' \
+    -H 'Authorization: Bearer token-inventado' \
+    http://localhost/api/v1/query/999888777
+
+  Criterio: el primero devuelve `{"valid":true,"data":{...}}`; el segundo, 401.
+  En la SPA, ese 401 dispara el evento `gd:unauthorized`, borra `gd_sesion` y
+  devuelve al usuario al `/login`.
+
+================================================================================
+5. CRUD + LOG DESDE LA INTERFAZ (15 min) — núcleo de la rúbrica R2
+================================================================================
+
+5.1 Abrir http://localhost/ → `/login`. Entrar con:
+  Correo: usuario.mock@uninorte.edu.co
+  Contraseña: mock123
+
+  Criterio: redirige a `/dashboard` y el sidebar muestra los seis servicios.
+  El token queda en `sessionStorage` bajo la clave `gd_sesion`.
+
+5.2 Datos de prueba (elige una fecha ANTIGUA para no cambiar la respuesta del RAG):
+
+  | Campo                | Valor                     |
+  |----------------------|---------------------------|
+  | Tipo de documento    | Cédula                    |
+  | Nro. Documento       | 999888777                 |
+  | Primer Nombre        | Ana                       |
+  | Segundo Nombre       | María                     |
+  | Apellidos            | Pérez Gómez               |
+  | Fecha de Nacimiento  | 01-ene-1990               |
+  | Género               | Femenino                  |
+  | Correo electrónico   | ana.prueba@example.com    |
+  | Celular              | 3001234567                |
+  | Foto                 | opcional, ≤ 2 MB          |
+
+5.3 CREAR → menú "Crear personas" → botón "Nueva persona" → rellenar → "Crear persona".
+  Criterio: mensaje verde "Persona 999888777 creada y registrada en el log" y card
+  con el documento. Si subiste foto, comprueba:
+
+    curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/uploads/<archivo>
+
+  Debe dar 200 (Nginx sirve el volumen `uploads_data` en solo lectura).
+
+5.4 CONSULTAR → menú "Consultar datos" → escribir 999888777 → "Buscar".
+  Criterio: card con nombre completo, documento, nacimiento, correo y celular.
+  No existe buscador por nombre: la llave es exactamente el documento.
+
+5.5 ACTUALIZAR → menú "Modificar datos" → buscar 999888777 → "Editar datos" →
+  cambiar el celular a 3007654321 → "Guardar cambios".
+  Criterio: mensaje "Cambios guardados y registrados en el log" y la card muestra
+  el celular nuevo. El número de documento aparece deshabilitado: es la llave.
+
+5.6 BORRAR → menú "Borrar personas" → buscar 999888777 → "Borrar persona" →
+  confirmar en el modal.
+  Criterio: mensaje "Persona eliminada y registrada en el log" y la card desaparece.
+  El modal existe para evitar borrados accidentales.
+
+5.7 CONSULTAR LOG → menú "Consultar log".
+  a) Filtrar solo por documento 999888777 → deben aparecer EVENTOS CREATE, READ,
+     UPDATE y DELETE. El READ aparece una vez por cada búsqueda (consultar,
+     actualizar y borrar).
+  b) Filtrar por tipo CREATE → solo eventos CREATE.
+  c) Filtrar por rango de fechas (hoy → hoy) → deben aparecer los eventos de hoy.
+  d) Combinar tipo + documento + rango → intersección de los tres filtros.
+  Criterio: las cards muestran tipo, documento, fecha y detalle. Si el rango está
+  invertido (desde > hasta), Zod muestra "La fecha inicial no puede ser mayor que
+  la final" y no se envía la petición.
+
+  Esto cubre R2 (15 pts) y R9 (3 pts).
+
+================================================================================
+6. VALIDACIONES EN AMBOS LADOS (8 min) — rúbrica R5
+================================================================================
+
+6.1 En el navegador, abre "Crear personas" → "Nueva persona" y prueba estos casos.
+    Cada uno debe mostrar el error en rojo junto al campo y NO llamar al gateway:
+
+  | Campo            | Valor inválido      | Mensaje esperado (contiene)                |
+  |------------------|---------------------|--------------------------------------------|
+  | Nro. Documento   | 12345678901         | "Máximo 10 caracteres"                     |
+  | Nro. Documento   | abc123              | "Debe ser un número…"                      |
+  | Primer Nombre    | Ana2                | "no puede contener números"                |
+  | Apellidos        | Pérez 3             | "no pueden contener números"               |
+  | Fecha            | 31-feb-2000         | "Usa dd-mmm-yyyy…"                         |
+  | Correo           | sin-arroba          | "Correo electrónico inválido"              |
+  | Celular          | 300123             | "exactamente 10 dígitos"                   |
+  | Foto             | imagen > 2 MB       | "La foto no puede superar los 2 MB"        |
+
+  Prueba también el botón "Usar calendario": el datepicker envía `YYYY-MM-DD` y
+  debe ser aceptado; al volver a "Escribir fecha", el valor se convierte a
+  `dd-mmm-yyyy` con meses en español.
+
+6.2 El backend no confía en el navegador. Repite una validación por API:
+
+  printf 'HTTP '
+  curl -sS -o /tmp/validacion.json -w '%{http_code}\n' -X POST \
+    http://localhost/api/v1/create \
+    -H "Authorization: Bearer $TOKEN" \
+    -F 'tipo_documento=Cédula' \
+    -F 'numero_documento=777666555' \
+    -F 'primer_nombre=Ana' \
+    -F 'segundo_nombre=' \
+    -F 'apellidos=Pérez' \
+    -F 'fecha_nacimiento=01-ene-1990' \
+    -F 'genero=Femenino' \
+    -F 'correo=ana@example.com' \
+    -F 'celular=123'
+  python3 -m json.tool /tmp/validacion.json | head -20
+
+  Criterio: HTTP 422 con detalle del campo `celular`. Fuente: Pydantic en
+  `backend/shared/schemas.py`. Zod y Pydantic tienen las MISMAS reglas.
+
+================================================================================
+7. RAG EN n8n (10 min) — rúbrica R3
+================================================================================
+
+7.1 Asegúrate de que exista al menos una persona indexada. Si borraste todas en el
+    paso 5, crea una con fecha reciente (por ejemplo `15-ene-2015`) para tener un
+    "empleado más joven". El dato verificado en el repositorio responde
+    `Pedro Pérez Gómez`.
+
+7.2 Menú "Lenguaje natural" → botón "Abrir chat en n8n". Se abre en pestaña nueva:
+    http://localhost/n8n/webhook/chat-rag-consulta-personas/chat
+
+  Si el gateway pide credenciales, usa `N8N_USER` / `N8N_PASSWORD` del `.env`.
+  Criterio: se ve el chat nativo de n8n (NO un chat de React).
+
+7.3 Envía la pregunta oficial:
+
+  ¿Cuál es el empleado más joven que se ha registrado?
+
+  Criterio: la respuesta aparece DENTRO del chat de n8n y menciona un nombre
+  completo (en el dataset verificado: `Pedro Pérez Gómez`). La primera respuesta
+  puede tardar unos segundos mientras Ollama carga el modelo.
+
+7.4 Vuelve a la SPA → "Consultar log" → filtra por tipo RAG_QUERY.
+  Criterio: hay una card con `detalle: {pregunta, respuesta}` que contiene la
+  pregunta y la respuesta exactas del chat.
+
+7.5 Opcional: en la UI de n8n (http://localhost/n8n/), abre "Workflows" y comprueba
+  que "RAG - Consulta de Personas" está activo/publicado (id KTgajEBwgIVpKDRy).
+
+  Si falla: revisa `docker compose logs --tail=80 ollama`, que los modelos ya se
+  descargaron (`docker compose logs ollama-pull`) y que el archivo del workflow
+  siga en `n8n/workflows/rag_consulta_personas.json`.
+
+================================================================================
+8. RESILIENCIA R7: APAGAR SOLO LA CONSULTA (5 min)
+================================================================================
+
+  docker compose stop ms-person-query
+
+  printf 'query health → '
+  curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/api/v1/query/health
+  printf 'logs health  → '
+  curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/api/v1/logs/health
+
+  Criterio: query devuelve 503 con
+  `{"detail":"El servicio de consulta está deshabilitado temporalmente"}`;
+  logs sigue en 200. En la SPA, "Consultar datos" muestra el aviso
+  "Consultar datos: servicio inactivo" con botón "Reintentar", y "Consultar log"
+  sigue funcionando. El menú completo sigue navegable.
+
+  docker compose start ms-person-query
+  printf 'query health tras reiniciar → '
+  curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/api/v1/query/health
+
+  Criterio: vuelve el 200. El panel se recupera solo (refresco cada 30 s) o con
+  "Reintentar". No uses `docker compose down -v`: perderías los datos.
+
+  Esto cubre R7 (3 pts) y el riesgo #11 del contexto.
+
+================================================================================
+9. RESILIENCIA VISUAL DE n8n (opcional, 3 min)
+================================================================================
+
+  docker compose stop n8n
+  # En la SPA: /rag debe mostrar "servicio inactivo"; /logs sigue bien.
+  docker compose start n8n
+
+  Criterio: el gateway devuelve 502/503 mientras n8n está parado y el panel se
+  marca inactivo. Un 401 NO cuenta como caída: significa que el basic-auth del
+  gateway está activo y el gateway sí responde (ver `api.ts`, `verificarServicio`).
+
+================================================================================
+10. CRITERIOS DE ACEPTACIÓN POR REQUISITO (resumen rápido)
+================================================================================
+
+  | Req | Puntos | Cómo se comprobó en esta guía                         | Estado |
+  |-----|-------:|--------------------------------------------------------|--------|
+  | R1  | 4      | §4 login JWT; SDK ROBLE presente pero sin contrato real| Parcial|
+  | R2  | 15     | §5 CREATE/READ/UPDATE/DELETE + eventos en log          | OK     |
+  | R3  | 12     | §7 pregunta/respuesta en el chat de n8n + RAG_QUERY    | OK     |
+  | R4  | 2      | §5.2 los 10 campos del enunciado en el modal           | OK     |
+  | R5  | 4      | §6 Zod en SPA y 422 de Pydantic; 8 + 12 pruebas        | OK     |
+  | R6  | 5      | §2 y §3: un contenedor por opción del menú             | OK     |
+  | R7  | 3      | §8 parar/reanudar ms-person-query sin tumbar /logs     | OK     |
+  | R8  | 2      | §2 postgres-db en contenedor propio + migración        | OK     |
+  | R9  | 3      | §5.7 filtros por tipo, documento y rango de fechas     | OK     |
+
+  Total asegurado: 46/50. Pendiente condicionado: R1 requiere repetir §4 con un
+  `ROBLE_CONTRACT_ID` real y `AUTH_MODE=roble`. Fuera de la rúbrica: CI en GitHub
+  Actions sigue pendiente.
+
+================================================================================
+11. PROBLEMAS FRECUENTES Y SU EXPLICACIÓN
+================================================================================
+
+  Síntoma                                   Causa / acción
+  ----------------------------------------  ------------------------------------------
+  404 en /api/v1/...                        El prefijo del APIRouter no coincide con el
+                                            `location` de gateway/nginx.conf.
+  Bucle de redirecciones 301/307            Se añadió barra final a un location de API.
+  /n8n/rest/... devuelve HTML del editor    Falta la barra final en `proxy_pass http://n8n_service/;`.
+  401 en /n8n/healthz                       Esperado: basic-auth del gateway. Usa -u.
+  401 en un endpoint de API                 Token vencido/inválido; la SPA cierra sesión.
+  503 "servicio de autenticación…"          ms-auth caído; distinto de un 401.
+  503 al crear/actualizar                   ms-logs no confirmó el evento; se hizo rollback.
+  409 al crear                              El documento ya existe (es la PRIMARY KEY).
+  422 al crear                              Validación Pydantic; revisa el campo indicado.
+  "Backend listo. La interfaz se activa…"   Frontend no levantado: falta `--profile ui`.
+  Asistente inicial de n8n aparece          Falta N8N_INSTANCE_OWNER_PASSWORD_HASH o está mal escapado (`$$`).
+  Ollama timeout en la primera pregunta     Espera a `ollama-pull`; revisa sus logs y la RAM.
+  Lighthouse SEO ~63                        Esperado: robots.txt bloquea un panel tras login.
+  npm audit avisa de majors                 zod/react-router: no se actualizan por ser cambios
+                                            rompientes; los flujos usados no alcanzan esos casos.
+  Datos desaparecidos                       Alguien ejecutó `down -v`. No repetir; usar `stop`.
+  Puerto 80/5432 ocupado                    Libera el puerto o ajusta Compose antes de arrancar.
+
+================================================================================
+12. CIERRE SIN DESTRUIR NADA
+================================================================================
+
+Si solo quieres dejar el entorno apagado:
+
+  docker compose stop
+
+Si quieres reconstruir la SPA después de cambiar frontend:
+
+  docker compose --profile ui up -d --build frontend
+
+Si cambiaste validaciones, rutas, esquema, flujo RAG o estado: actualiza
+`contexto.md` en la MISMA tarea, añade una línea al registro de cambios y vuelve a
+ejecutar las secciones 1 y 3 de esta guía.
+
+Última verificación de esta guía: 2026-11-21, contra el código presente en el
+repositorio.

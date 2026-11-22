@@ -264,10 +264,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Vite sustituye las variables VITE_* en tiempo de build, no en runtime.
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+        VITE_N8N_CHAT_URL: ${VITE_N8N_CHAT_URL:-/n8n/webhook/chat-rag-consulta-personas/chat}
     container_name: frontend
     restart: unless-stopped
-    environment:
-      VITE_API_URL: /api/v1
     networks:
       - app-network
 
