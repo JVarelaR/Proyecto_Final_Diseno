@@ -1,0 +1,656 @@
+{
+  "name": "RAG - Consulta de Personas",
+  "id": "qNOg7qbLykYHNxen",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [-900, 300],
+      "webhookId": "chat-rag-consulta-personas"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_EMBED_MODEL, input: $json.chatInput, dimensions: Number($env.OPENROUTER_EMBED_DIMENSIONS) }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Embed pregunta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const vector = $json.data[0].embedding;\nconst literal = '[' + vector.join(',') + ']';\nconst sql = \"SELECT p.numero_documento, p.primer_nombre, p.segundo_nombre, p.apellidos, p.fecha_nacimiento, 1 - (pe.embedding <=> '\" + literal + \"'::vector) AS similitud FROM persona_embeddings pe JOIN personas p ON p.numero_documento = pe.numero_documento ORDER BY pe.embedding <=> '\" + literal + \"'::vector LIMIT 5\";\nreturn [{ json: { sql } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "SQL vectorial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-420, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Buscar similares",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-180, 300],
+      "credentials": {
+        "postgres": {
+          "id": "__POSTGRES_CREDENTIAL_ID__",
+          "name": "gestion_personas"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Chat Trigger').first().json.chatInput || '';\nconst pregunta = original.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\nconst rango = pregunta.match(/(?:mas de|mayor(?:es)? de|superior a|al menos|menos de|menor(?:es)? de)\\s+(\\d{1,3})/);\nconst exacta = pregunta.match(/(?:tienen|de|con)\\s+(\\d{1,3})\\s+anos/);\nlet ageMode = '';\nlet ageLimit = 0;\nif (rango) {\n  ageMode = /^(?:menos de|menor)/.test(rango[0]) ? 'lt' : /^al menos/.test(rango[0]) ? 'gte' : 'gt';\n  ageLimit = Number(rango[1]);\n} else if (exacta) {\n  ageMode = 'eq';\n  ageLimit = Number(exacta[1]);\n}\nconst camposNoDisponibles = [];\nif (/\\b(direccion|ciudad|municipio|barrio|donde|vive|viven)\\b/.test(pregunta)) camposNoDisponibles.push('dirección y ciudad');\nif (/\\b(cargo|area|puesto|profesion|trabaja|trabajan)\\b/.test(pregunta)) camposNoDisponibles.push('cargo y área de trabajo');\nconst documento = pregunta.match(/(?:documento|cedula|identificacion)\\D{0,15}(\\d{5,10})/) || (!rango && pregunta.match(/\\b\\d{6,10}\\b/));\nconst comunes = new Set('a al anos apellidos barrio cargo celular ciudad como con cual cuales de del documento donde edad el electronico empleado empleados empleada empleados en es esta estan existe fecha genero hay identificacion informacion la las los mas mayor mayores menor menores municipio nombre nacimiento nacio no numero o por persona personas profesion puesto que quien quienes registrado registrada registrados registradas registro se sexo son telefono tienen trabaja trabajan un una y vive viven correo email direccion area promedio total cuantos cuantas'.split(' '));\nconst objetivo = camposNoDisponibles.length ? '' : documento ? documento[1] : pregunta.replace(/[^a-z0-9]+/g, ' ').trim().split(/\\s+/).filter((word) => word && !comunes.has(word) && !/^\\d+$/.test(word)).join(' ');\nreturn [{ json: { pregunta: original, objetivo, ageMode, ageLimit, camposNoDisponibles } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000012",
+      "name": "Preparar consulta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [60, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const consulta = $json;\nconst pregunta = consulta.pregunta.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\nconst conteo = /\\b(?:cuantos|cuantas)\\b/.test(pregunta) && /\\b(?:personas|empleados|hombres|mujeres|masculino|femenino)\\b/.test(pregunta);\nconst ubicacion = /\\b(direccion|direcciones|ciudad|ciudades|municipio|municipios|barrio|barrios|donde|vive|viven|reside|residen)\\b|\\b(?:son|viven|residen) (?:de|en) (?!genero|sexo|edad|documento|tipo)[a-z]|\\b(?:personas|empleados|empleadas) de (?!genero|sexo|edad|documento|tipo)[a-z]/.test(pregunta);\nif (ubicacion && !consulta.camposNoDisponibles.includes('dirección y ciudad')) consulta.camposNoDisponibles.push('dirección y ciudad');\nconst trabajo = /\\b(cargo|cargos|area|areas|puesto|puestos|profesion|profesiones|trabaja|trabajan|trabajo)\\b/.test(pregunta);\nif (trabajo && !consulta.camposNoDisponibles.includes('cargo y área de trabajo')) consulta.camposNoDisponibles.push('cargo y área de trabajo');\nconst documento = pregunta.match(/\\b(\\d{5,10})\\b/);\nconst stop = new Set('a al anos apellidos area barrio cargo celular ciudad como con cual cuales cuanto cuantos cuanta cuantas de del dime dice documento donde edad el electronico email empleada empleado empleados en es esta estan existe fue fecha genero ha hay hombre hombres identificacion informacion la las los mas mayor mayores me menor menores municipio mujer mujeres nacimiento nacio necesito no nombre numero o por favor persona personas podria podrias profesion puesto que quien quienes registrado registrada registrados registradas registro registrar registrarse registrando se sexo son telefono tiene tienen trabaja trabajan trabajo un una y vive viven correo direccion direcciones ciudades municipios barrios muestra mostrar indica indicar consulta consultar datos verifica verificar encuentra promedio total masculino femenina femenino reciente recientes ultimo ultima ultimos ultimas joven jovenes viejo viejos'.split(' '));\nif (consulta.camposNoDisponibles.length || conteo) consulta.objetivo = '';\nelse if (documento && !/\\b(?:edad|ano|anos)\\b/.test(pregunta)) consulta.objetivo = documento[1];\nelse consulta.objetivo = pregunta.replace(/[^a-z0-9]+/g, ' ').trim().split(/\\s+/).filter((word) => word && !stop.has(word) && !/^\\d+$/.test(word)).join(' ');\nreturn [{ json: consulta }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000016",
+      "name": "Ajustar consulta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sql-01",
+              "name": "sql_01",
+              "value": "WITH edades AS (",
+              "type": "string"
+            },
+            {
+              "id": "sql-02",
+              "name": "sql_02",
+              "value": "  SELECT p.numero_documento, p.primer_nombre, p.segundo_nombre, p.apellidos,",
+              "type": "string"
+            },
+            {
+              "id": "sql-03",
+              "name": "sql_03",
+              "value": "         p.fecha_nacimiento, p.genero, p.correo, p.celular, p.created_at,",
+              "type": "string"
+            },
+            {
+              "id": "sql-04",
+              "name": "sql_04",
+              "value": "         EXTRACT(YEAR FROM age(CURRENT_DATE, p.fecha_nacimiento))::int AS edad",
+              "type": "string"
+            },
+            {
+              "id": "sql-05",
+              "name": "sql_05",
+              "value": "  FROM personas p",
+              "type": "string"
+            },
+            {
+              "id": "sql-06",
+              "name": "sql_06",
+              "value": "), filtradas_edad AS (",
+              "type": "string"
+            },
+            {
+              "id": "sql-07",
+              "name": "sql_07",
+              "value": "  SELECT * FROM edades WHERE ($2 = 'gt' AND edad > $3::int)",
+              "type": "string"
+            },
+            {
+              "id": "sql-08",
+              "name": "sql_08",
+              "value": "    OR ($2 = 'lt' AND edad < $3::int)",
+              "type": "string"
+            },
+            {
+              "id": "sql-09",
+              "name": "sql_09",
+              "value": "    OR ($2 = 'gte' AND edad >= $3::int)",
+              "type": "string"
+            },
+            {
+              "id": "sql-10",
+              "name": "sql_10",
+              "value": "    OR ($2 = 'eq' AND edad = $3::int)",
+              "type": "string"
+            },
+            {
+              "id": "sql-11",
+              "name": "sql_11",
+              "value": ")",
+              "type": "string"
+            },
+            {
+              "id": "sql-12",
+              "name": "sql_12",
+              "value": "SELECT (SELECT COUNT(*) FROM personas) AS total_personas,",
+              "type": "string"
+            },
+            {
+              "id": "sql-13",
+              "name": "sql_13",
+              "value": "(SELECT jsonb_object_agg(genero, cantidad) FROM (",
+              "type": "string"
+            },
+            {
+              "id": "sql-14",
+              "name": "sql_14",
+              "value": "  SELECT genero, COUNT(*) AS cantidad FROM personas GROUP BY genero",
+              "type": "string"
+            },
+            {
+              "id": "sql-15",
+              "name": "sql_15",
+              "value": ") g) AS por_genero,",
+              "type": "string"
+            },
+            {
+              "id": "sql-16",
+              "name": "sql_16",
+              "value": "(SELECT ROUND(AVG(EXTRACT(YEAR FROM age(CURRENT_DATE, fecha_nacimiento)))::numeric, 1)",
+              "type": "string"
+            },
+            {
+              "id": "sql-17",
+              "name": "sql_17",
+              "value": " FROM personas) AS promedio_edad,",
+              "type": "string"
+            },
+            {
+              "id": "sql-18",
+              "name": "sql_18",
+              "value": "(SELECT jsonb_build_object('primer_nombre', primer_nombre,",
+              "type": "string"
+            },
+            {
+              "id": "sql-19",
+              "name": "sql_19",
+              "value": "'segundo_nombre', segundo_nombre, 'apellidos', apellidos,",
+              "type": "string"
+            },
+            {
+              "id": "sql-20",
+              "name": "sql_20",
+              "value": "'fecha_nacimiento', fecha_nacimiento, 'edad', edad)",
+              "type": "string"
+            },
+            {
+              "id": "sql-21",
+              "name": "sql_21",
+              "value": " FROM edades ORDER BY fecha_nacimiento DESC LIMIT 1) AS mas_joven,",
+              "type": "string"
+            },
+            {
+              "id": "sql-22",
+              "name": "sql_22",
+              "value": "(SELECT jsonb_build_object('primer_nombre', primer_nombre,",
+              "type": "string"
+            },
+            {
+              "id": "sql-23",
+              "name": "sql_23",
+              "value": "'segundo_nombre', segundo_nombre, 'apellidos', apellidos,",
+              "type": "string"
+            },
+            {
+              "id": "sql-24",
+              "name": "sql_24",
+              "value": "'fecha_nacimiento', fecha_nacimiento, 'edad', edad)",
+              "type": "string"
+            },
+            {
+              "id": "sql-25",
+              "name": "sql_25",
+              "value": " FROM edades ORDER BY fecha_nacimiento ASC LIMIT 1) AS mas_mayor,",
+              "type": "string"
+            },
+            {
+              "id": "sql-26",
+              "name": "sql_26",
+              "value": "(SELECT jsonb_build_object('primer_nombre', primer_nombre,",
+              "type": "string"
+            },
+            {
+              "id": "sql-27",
+              "name": "sql_27",
+              "value": "'segundo_nombre', segundo_nombre, 'apellidos', apellidos,",
+              "type": "string"
+            },
+            {
+              "id": "sql-28",
+              "name": "sql_28",
+              "value": "'created_at', created_at) FROM personas",
+              "type": "string"
+            },
+            {
+              "id": "sql-29",
+              "name": "sql_29",
+              "value": " ORDER BY created_at DESC LIMIT 1) AS ultimo_registro,",
+              "type": "string"
+            },
+            {
+              "id": "sql-30",
+              "name": "sql_30",
+              "value": "(SELECT COALESCE(jsonb_agg(persona), '[]'::jsonb) FROM (",
+              "type": "string"
+            },
+            {
+              "id": "sql-31",
+              "name": "sql_31",
+              "value": "  SELECT jsonb_build_object('numero_documento', numero_documento,",
+              "type": "string"
+            },
+            {
+              "id": "sql-32",
+              "name": "sql_32",
+              "value": "    'primer_nombre', primer_nombre, 'segundo_nombre', segundo_nombre,",
+              "type": "string"
+            },
+            {
+              "id": "sql-33",
+              "name": "sql_33",
+              "value": "    'apellidos', apellidos, 'fecha_nacimiento', fecha_nacimiento,",
+              "type": "string"
+            },
+            {
+              "id": "sql-34",
+              "name": "sql_34",
+              "value": "    'edad', edad, 'genero', genero, 'correo', correo, 'celular', celular,",
+              "type": "string"
+            },
+            {
+              "id": "sql-35",
+              "name": "sql_35",
+              "value": "    'created_at', created_at) AS persona",
+              "type": "string"
+            },
+            {
+              "id": "sql-36",
+              "name": "sql_36",
+              "value": "  FROM edades WHERE NULLIF($1, '') IS NOT NULL",
+              "type": "string"
+            },
+            {
+              "id": "sql-37",
+              "name": "sql_37",
+              "value": "    AND (position(lower($1) IN lower(concat_ws(' ', primer_nombre,",
+              "type": "string"
+            },
+            {
+              "id": "sql-38",
+              "name": "sql_38",
+              "value": "      segundo_nombre, apellidos))) > 0 OR position($1 IN numero_documento) > 0)",
+              "type": "string"
+            },
+            {
+              "id": "sql-39",
+              "name": "sql_39",
+              "value": "  ORDER BY primer_nombre, apellidos LIMIT 5",
+              "type": "string"
+            },
+            {
+              "id": "sql-40",
+              "name": "sql_40",
+              "value": ") coincidencias) AS personas_coincidentes,",
+              "type": "string"
+            },
+            {
+              "id": "sql-41",
+              "name": "sql_41",
+              "value": "(SELECT COUNT(*) FROM filtradas_edad) AS total_filtrado_edad,",
+              "type": "string"
+            },
+            {
+              "id": "sql-42",
+              "name": "sql_42",
+              "value": "(SELECT COALESCE(jsonb_agg(persona), '[]'::jsonb) FROM (",
+              "type": "string"
+            },
+            {
+              "id": "sql-43",
+              "name": "sql_43",
+              "value": "  SELECT jsonb_build_object('numero_documento', numero_documento,",
+              "type": "string"
+            },
+            {
+              "id": "sql-44",
+              "name": "sql_44",
+              "value": "    'primer_nombre', primer_nombre, 'segundo_nombre', segundo_nombre,",
+              "type": "string"
+            },
+            {
+              "id": "sql-45",
+              "name": "sql_45",
+              "value": "    'apellidos', apellidos, 'edad', edad) AS persona",
+              "type": "string"
+            },
+            {
+              "id": "sql-46",
+              "name": "sql_46",
+              "value": "  FROM filtradas_edad ORDER BY edad DESC LIMIT 20",
+              "type": "string"
+            },
+            {
+              "id": "sql-47",
+              "name": "sql_47",
+              "value": ") resultados) AS personas_por_edad",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000013",
+      "name": "Fragmentos SQL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [300, 540]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sql = Object.keys($json).filter((key) => key.startsWith('sql_')).sort().map((key) => $json[key]).join('\\n');\nreturn [{ json: { sql } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000014",
+      "name": "Construir SQL agregado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 540]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": "={{ [$('Ajustar consulta').first().json.objetivo, $('Ajustar consulta').first().json.ageMode, $('Ajustar consulta').first().json.ageLimit] }}"
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Agregados",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [780, 300],
+      "credentials": {
+        "postgres": {
+          "id": "__POSTGRES_CREDENTIAL_ID__",
+          "name": "gestion_personas"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const consulta = $('Ajustar consulta').first().json;\nconst similares = $('Buscar similares').all().map((item) => item.json);\nconst agregados = $('Agregados').first().json;\nconst contexto = JSON.stringify({ similares, agregados, filtro_edad: { modo: consulta.ageMode, edad: consulta.ageLimit }, campos_no_disponibles: consulta.camposNoDisponibles }, null, 2);\nreturn [{ json: { pregunta: consulta.pregunta, contexto } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Armar contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1020, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "prompt-01",
+              "name": "prompt_01",
+              "value": "Eres un asistente de gestión de datos personales. Responde en español, breve y claro.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-02",
+              "name": "prompt_02",
+              "value": "Usa solo el contexto de la base de datos. No inventes ni completes datos ausentes.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-03",
+              "name": "prompt_03",
+              "value": "Total: agregados.total_personas. Género: agregados.por_genero. Promedio: agregados.promedio_edad.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-04",
+              "name": "prompt_04",
+              "value": "Extremos: agregados.mas_joven y agregados.mas_mayor. Último registro: agregados.ultimo_registro.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-05",
+              "name": "prompt_05",
+              "value": "Dato individual/verificación: usa personas_coincidentes; si está vacío, pide nombre o documento.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-06",
+              "name": "prompt_06",
+              "value": "Filtro edad: úsalo solo si filtro_edad.modo no está vacío; total_filtrado_edad y lista de hasta 20.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-07",
+              "name": "prompt_07",
+              "value": "Si campos_no_disponibles no está vacío, explica que no se almacena ese dato; no lo infieras.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-08",
+              "name": "prompt_08",
+              "value": "Solo existen documento, nombres, nacimiento, género, correo, celular y fecha de registro.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-09",
+              "name": "prompt_09",
+              "value": "Las coincidencias semánticas son auxiliares; no las uses para conteos ni para confirmar identidad.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000015",
+      "name": "Instrucciones",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1260, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_LLM_MODEL, messages: [ { role: 'system', content: Object.keys($json).filter((key) => key.startsWith('prompt_')).sort().map((key) => $json[key]).join('\\n') }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ] }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "LLM OpenRouter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "asg-texto-respuesta",
+              "name": "texto",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Preparar respuesta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1740, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ms-auth:8000/api/v1/auth/service-token",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Service-Key", "value": "={{ $env.SERVICE_API_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "Token de servicio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ms-logs:8000/api/v1/logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.access_token }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tipo_transaccion: 'RAG_QUERY', detalle: { pregunta: $('Armar contexto').first().json.pregunta, respuesta: $('Preparar respuesta').first().json.texto } }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000010",
+      "name": "Registrar RAG_QUERY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "asg-texto-final",
+              "name": "text",
+              "value": "={{ $('Preparar respuesta').first().json.texto }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000011",
+      "name": "Respuesta al chat",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2460, 300]
+    }
+  ],
+  "connections": {
+    "Chat Trigger": {
+      "main": [[{ "node": "Embed pregunta", "type": "main", "index": 0 }]]
+    },
+    "Embed pregunta": {
+      "main": [[{ "node": "SQL vectorial", "type": "main", "index": 0 }]]
+    },
+    "SQL vectorial": {
+      "main": [[{ "node": "Buscar similares", "type": "main", "index": 0 }]]
+    },
+    "Buscar similares": {
+      "main": [[{ "node": "Preparar consulta", "type": "main", "index": 0 }]]
+    },
+    "Preparar consulta": {
+      "main": [[{ "node": "Ajustar consulta", "type": "main", "index": 0 }]]
+    },
+    "Ajustar consulta": {
+      "main": [[{ "node": "Fragmentos SQL", "type": "main", "index": 0 }]]
+    },
+    "Fragmentos SQL": {
+      "main": [[{ "node": "Construir SQL agregado", "type": "main", "index": 0 }]]
+    },
+    "Construir SQL agregado": {
+      "main": [[{ "node": "Agregados", "type": "main", "index": 0 }]]
+    },
+    "Agregados": {
+      "main": [[{ "node": "Armar contexto", "type": "main", "index": 0 }]]
+    },
+    "Armar contexto": {
+      "main": [[{ "node": "Instrucciones", "type": "main", "index": 0 }]]
+    },
+    "Instrucciones": {
+      "main": [[{ "node": "LLM OpenRouter", "type": "main", "index": 0 }]]
+    },
+    "LLM OpenRouter": {
+      "main": [[{ "node": "Preparar respuesta", "type": "main", "index": 0 }]]
+    },
+    "Preparar respuesta": {
+      "main": [[{ "node": "Token de servicio", "type": "main", "index": 0 }]]
+    },
+    "Token de servicio": {
+      "main": [[{ "node": "Registrar RAG_QUERY", "type": "main", "index": 0 }]]
+    },
+    "Registrar RAG_QUERY": {
+      "main": [[{ "node": "Respuesta al chat", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

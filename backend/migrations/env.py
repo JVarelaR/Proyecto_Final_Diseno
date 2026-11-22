@@ -1,3 +1,9 @@
+"""Entorno de Alembic: puente entre los modelos de `shared` y la BD.
+
+Define `target_metadata` (la metadata de `shared.database.Base`) para que
+Alembic pueda comparar modelos con tablas y generar nuevas migraciones.
+"""
+
 import os
 import sys
 from logging.config import fileConfig
@@ -6,6 +12,8 @@ from sqlalchemy import engine_from_config, pool
 from dotenv import load_dotenv
 
 
+# Lee `.env` para Development local (nunca se versiona). En Docker la variable
+# ya viene del `env_file` de Compose y `load_dotenv` no la sobrescribe.
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 # Asegura que 'shared' sea importable desde backend/
@@ -52,6 +60,7 @@ def run_migrations_online() -> None:
             context.run_migrations()
 
 
+# Offline = generar el SQL sin conectarse; online = ejecutar contra la BD.
 if context.is_offline_mode():
     run_migrations_offline()
 else:
