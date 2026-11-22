@@ -143,7 +143,7 @@ Microservicios en contenedores Docker independientes, orquestados con Docker Com
 - **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async) + Alembic.
 - **BD:** PostgreSQL + pgvector. Local en Docker y Supabase (gratis) para nube, con las mismas migraciones.
 - **Auth:** SDK oficial `roble` (Universidad del Norte) con `AUTH_MODE=roble`; `AUTH_MODE=mock` para desarrollo sin contrato. JWT HS256 + `get_current_user`.
-- **IA / RAG:** n8n + **OpenRouter** (una sola key): embeddings `openai/text-embedding-3-small` a 768 dims (modelo validado el 2026-11-21 con la key del equipo; los `:free` dan 2048 dims o devuelven 503) y LLM `openrouter/free`. No se usa Ollama ni Gemini/Groq directamente.
+- **IA / RAG:** n8n + **Ollama local** (sin API key): embeddings `nomic-embed-text` a 768 dims y LLM `qwen2.5:0.5b` (opción más ligera, sin GPU). Los modelos se descargan en el primer arranque al volumen `ollama_data`. Ya no se usa OpenRouter ni Gemini/Groq.
 - **Fotos:** volumen `uploads_data`, `foto_url` relativa servida por `/uploads/`.
 - **Frontend:** diferido a una fase posterior; se activa con el perfil `ui` de Compose.
 - **CI/CD:** GitHub + GitHub Actions (pruebas).
@@ -180,7 +180,7 @@ Microservicios en contenedores Docker independientes, orquestados con Docker Com
 
 ### 5.3 `persona_embeddings`
 
-Tabla con vectores (pgvector) usada por el RAG, definida en la migración inicial. Columnas: `id` UUID PK, `numero_documento` VARCHAR(10) FK→`personas` ON DELETE CASCADE (UNIQUE), `contenido_texto` TEXT y `embedding` VECTOR(768). Índice HNSW `ix_persona_embeddings_vector` con distancia coseno. La dimensión 768 corresponde al modelo de embeddings de OpenRouter configurado en `OPENROUTER_EMBED_DIMENSIONS`. Modelo SQLAlchemy: `PersonaEmbedding` en `shared.models`. La indexan `ms-person-create` y `ms-person-update` (mejor esfuerzo); `ms-person-delete` borra por cascade.
+Tabla con vectores (pgvector) usada por el RAG, definida en la migración inicial. Columnas: `id` UUID PK, `numero_documento` VARCHAR(10) FK→`personas` ON DELETE CASCADE (UNIQUE), `contenido_texto` TEXT y `embedding` VECTOR(768). Índice HNSW `ix_persona_embeddings_vector` con distancia coseno. La dimensión 768 es nativa de `nomic-embed-text` (Ollama), por lo que no cambió la migración; se configura en `OLLAMA_EMBED_DIMENSIONS` y se valida en `shared/embedding_client.py`. El texto indexado lleva el prefijo `search_document:`. Tras migrar de OpenRouter se reindexaron los embeddings existentes (sin borrar personas ni logs) porque los espacios semánticos no son comparables. Modelo SQLAlchemy: `PersonaEmbedding` en `shared.models`. La indexan `ms-person-create` y `ms-person-update` (mejor esfuerzo); `ms-person-delete` borra por cascade.
 
 ### 5.4 `roble_token_storage`
 
@@ -195,26 +195,27 @@ La crea Alembic. Solo la usa `shared/roble_storage.py` cuando `AUTH_MODE=roble` 
 
 ## 6. Flujo RAG en n8n
 
-**Indexación (write path):** `ms-person-create` y `ms-person-update` generan el embedding con `POST {OPENROUTER_BASE_URL}/embeddings` (modelo `OPENROUTER_EMBED_MODEL`, `dimensions=768`) sobre un texto que incluye nombres, documento, fecha de nacimiento y género, y hacen UPSERT en `persona_embeddings`. `ms-person-delete` borra por `ON DELETE CASCADE`. Si OpenRouter falla, el CRUD no se bloquea (mejor esfuerzo).
+**Indexación (write path):** `ms-person-create` y `ms-person-update` generan el embedding con `POST {OLLAMA_BASE_URL}/v1/embeddings` (modelo `OLLAMA_EMBED_MODEL` = `nomic-embed-text`, 768 dims, texto con prefijo `search_document:`) sobre un texto que incluye nombres, documento, fecha de nacimiento y género, y hacen UPSERT en `persona_embeddings`. `ms-person-delete` borra por `ON DELETE CASCADE`. Si Ollama falla, el CRUD no se bloquea (mejor esfuerzo). Los modelos se descargan al volumen `ollama_data` mediante el servicio `ollama-pull` en el primer arranque.
 
 **Consulta (read path, workflow `n8n/workflows/rag_consulta_personas.json`):**
 
 1. El usuario escribe la pregunta en el chat nativo de n8n (protegido con basic-auth y servido en `/n8n/`).
-2. `Embed pregunta` → OpenRouter `/embeddings` con el mismo modelo y `dimensions=768` que la indexación.
+2. `Embed pregunta` → Ollama `/v1/embeddings` con `OLLAMA_EMBED_MODEL` y prefijo `search_query:`.
 3. `Buscar similares` → SQL con distancia coseno: `ORDER BY pe.embedding <=> '<vector>'::vector LIMIT 5`.
 4. `Agregados` → SQL adicional con `ORDER BY fecha_nacimiento DESC/ASC LIMIT 1` para responder preguntas de mínimo/máximo (riesgo #1).
-5. `LLM OpenRouter` → `POST /chat/completions` con `OPENROUTER_LLM_MODEL` y el contexto recuperado; se le obliga a responder en español y solo con ese contexto.
-6. `Token de servicio` → `POST /api/v1/auth/service-token` con `X-Service-Key`; el JWT devuelto se usa como Bearer.
-7. `Registrar RAG_QUERY` → `POST /api/v1/logs` con `detalle: {pregunta, respuesta}`; `ms-logs` inserta en `transaccion_logs` y responde `201 Created`.
-8. `Respuesta al chat` devuelve el texto; se ve en el widget de n8n.
+5. `Preparar contexto` → quita el campo `similitud` y compone `nombre_mas_joven` con `primer_nombre` + `segundo_nombre` + `apellidos`, para que el LLM no filtre valores de distancia ni tenga que pegar columnas separadas.
+6. `LLM Ollama` → `POST {OLLAMA_BASE_URL}/v1/chat/completions` con `OLLAMA_LLM_MODEL` = `qwen2.5:0.5b`, `temperature: 0` y el contexto recuperado; se le obliga a responder en español, solo con ese contexto y con el nombre completo cuando identifique a una persona.
+7. `Token de servicio` → `POST /api/v1/auth/service-token` con `X-Service-Key`; el JWT devuelto se usa como Bearer.
+8. `Registrar RAG_QUERY` → `POST /api/v1/logs` con `detalle: {pregunta, respuesta}`; `ms-logs` inserta en `transaccion_logs` y responde `201 Created`.
+9. `Respuesta al chat` devuelve el texto; se ve en el widget de n8n.
 
-Pregunta de prueba oficial: *"¿Cuál es el empleado más joven que se ha registrado?"* => debe responder el nombre y dejar un `RAG_QUERY` en el log. **Verificado el 2026-11-21:** respuesta `El empleado más joven registrado es **Pedro Pérez Gómez**, nacido el **20 de marzo de 2005**.` y un `RAG_QUERY` con `detalle: {pregunta, respuesta}` en `transaccion_logs`.
+Pregunta de prueba oficial: *"¿Cuál es el empleado más joven que se ha registrado?"* => debe responder el nombre y dejar un `RAG_QUERY` en el log. **Verificado el 2026-11-21 con Ollama local:** respuesta `Pedro Pérez Gómez` y un `RAG_QUERY` con `detalle: {pregunta, respuesta}` en `transaccion_logs`.
 
 **Configuración de la instancia n8n (2026-11-21):**
 - El owner se aprovisiona al arrancar con `N8N_INSTANCE_OWNER_MANAGED_BY_ENV=true` y `N8N_INSTANCE_OWNER_EMAIL=admin@proyecto.local` (el hash bcrypt se genera desde `N8N_PASSWORD` y se guarda escapando `$` como `$$` en `.env`). Así se evita el asistente inicial y se puede usar la API REST.
 - La credencial Postgres `gestion_personas` apunta a `postgres-db:5432/gestion_personas`, usuario `admin` y password el default de Compose (`POSTGRES_PASSWORD`, por defecto `admin123`). El campo `ssl` debe ser el string **`disable`** (no el booleano `false`), o n8n 2.x falla con `The server does not support SSL connections`.
-- El workflow se versiona en `n8n/workflows/rag_consulta_personas.json` con el placeholder `__POSTGRES_CREDENTIAL_ID__`; al importar se sustituye por el id real de la credencial (n8n CLI `import:workflow` + `publish:workflow`). Id del workflow: `KTgajEBwgIVpKDRy`, publicado/activo.
-- `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` es necesario porque los nodos Code leen `$env.OPENROUTER_*` (n8n 2.x lo bloquea por defecto).
+- El workflow se versiona en `n8n/workflows/rag_consulta_personas.json` con el id fijo `KTgajEBwgIVpKDRy` (para que el reimport actualice el mismo flujo y no cree duplicados) y el placeholder `__POSTGRES_CREDENTIAL_ID__`; al importar se sustituye por el id real de la credencial (n8n CLI `import:workflow` + `publish:workflow`). Workflow publicado/activo.
+- `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` es necesario porque los nodos Code leen `$env.OLLAMA_*` (n8n 2.x lo bloquea por defecto).
 - El webhook real del chat es `/n8n/webhook/chat-rag-consulta-personas/chat` (el sufijo `/chat` lo añade el nodo Chat Trigger; la API de n8n lo registra en `webhook_entity`).
 - El gateway reescribe `/n8n/` con `proxy_pass http://n8n_service/;` (barra final) para que `/n8n/rest/...` llegue como `/rest/...`; sin ella la API REST caía en el HTML del editor.
 
@@ -273,7 +274,7 @@ async def consultar_persona(
 Resolver y registrar la decisión tomada en el registro de cambios.
 
 1. **RAG vs. preguntas agregadas — RESUELTO (2026-11-21).** El texto embebido incluye fecha de nacimiento y el workflow ejecuta además una consulta SQL `ORDER BY fecha_nacimiento DESC/ASC LIMIT 1`, cuyo resultado se entrega al LLM junto al top-5 vectorial. Se prueba siempre con la pregunta oficial.
-2. **Esquema de `persona_embeddings` — RESUELTO (2026-11-21).** Ver §5.3: `VECTOR(768)`, texto con nombres/documento/fecha/género e índice HNSW coseno.
+2. **Esquema de `persona_embeddings` — RESUELTO (2026-11-21).** Ver §5.3: `VECTOR(768)` (compatible con `nomic-embed-text`), texto con nombres/documento/fecha/género e índice HNSW coseno; reindexado tras la migración a Ollama.
 3. **Quién genera los embeddings — RESUELTO (2026-11-21).** Los generan `ms-person-create` y `ms-person-update` de forma asíncrona y mejor esfuerzo; `ms-person-delete` depende del `ON DELETE CASCADE`. n8n solo embebe la pregunta.
 4. **Formato `dd-mmm-yyyy` — RESUELTO (2026-11-21).** Meses en español: `ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic`. Implementado en `shared/schemas.py`; Zod deberá replicarlo.
 5. **Foto (≤ 2 MB) — RESUELTO (2026-11-21).** Se guarda en el volumen `uploads_data` dentro de los contenedores de create/update; `foto_url` guarda `/uploads/<archivo>` y Nginx lo sirve en solo lectura.
@@ -281,6 +282,7 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 7. **Registro de logs en `ms-person-query` — RESUELTO (2026-11-21).** Nginx usa `resolver 127.0.0.11` y `proxy_pass` variable: si el contenedor está parado, solo `/api/v1/query` responde `503` controlado; los demás servicios siguen activos.
 8. **Nombre del servicio de logs — RESUELTO.** Se usa `ms-logs` en Compose, rutas y documentación.
 9. **Data Warehouse (Fase 6, pendiente).** Se descartó incluirlo en el bloque backend. Si se hace, será un schema `dw` adicional en el mismo `postgres-db`, con vistas materializadas (`dim_persona`, `dim_tiempo`, `fact_transaccion`) refrescadas por un Schedule de n8n, sin reemplazar el modelo OLTP ni mover `persona_embeddings`.
+10. **Proveedor de IA migrado a Ollama local — RESUELTO (2026-11-21).** Se eliminó OpenRouter por completo (sin API key, coste cero, funcionamiento offline y privacidad). Modelos `nomic-embed-text` (embeddings, 768 dims) y `qwen2.5:0.5b` (LLM), descargados en `ollama_data` por `ollama-pull`; `.env.example` ya no contiene `OPENROUTER_*`. Se reindexaron los embeddings existentes sin borrar personas ni logs y se verificó la pregunta oficial con `RAG_QUERY`.
 
 ---
 
@@ -290,7 +292,7 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 
 - [ ] R1 Autenticación ROBLE integrada (backend listo en `AUTH_MODE=mock`; pendiente ROBLE real con `ROBLE_CONTRACT_ID` y el frontend)
 - [x] R2 CRUD completo + log de todas las transacciones (verificado por HTTP: `CREATE`/`READ`/`UPDATE`/`DELETE`)
-- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (verificado con la pregunta oficial el 2026-11-21)
+- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (verificado con la pregunta oficial el 2026-11-21 con Ollama local: `Pedro Pérez Gómez`)
 - [ ] R4 Formulario con todos los campos (frontend pendiente del modelo de UI)
 - [ ] R5 Validaciones en Zod y Pydantic (Pydantic listo; Zod pendiente del frontend)
 - [x] R6 Un microservicio por opción del menú
@@ -298,6 +300,7 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 - [x] R8 `postgres-db` en contenedor independiente (+ migraciones Alembic, `Embedding` de 768 dims)
 - [x] R9 Consulta de logs por tipo, documento y fecha
 - [x] `docker compose up -d --build` levanta todo y `docker compose config --quiet` pasa
+- [x] RAG con Ollama local (`nomic-embed-text` + `qwen2.5:0.5b`), sin OpenRouter; embeddings reindexados y pregunta oficial verificada
 - [ ] CI en GitHub Actions
 
 ---
@@ -311,3 +314,4 @@ Formato: `AAAA-MM-DD — qué cambió — archivos/servicios afectados`
 - 2026-11-21 — Modelo de embeddings fijado a `openai/text-embedding-3-small` (768 dims) y LLM `openrouter/free` — `backend/shared/embedding_client.py`, `n8n/workflows/rag_consulta_personas.json`, `.env.example`.
 - 2026-11-21 — Basic-auth de n8n en el gateway, owner aprovisionado por env, credencial Postgres con `ssl: disable` y workflow publicado; fin del RAG verificado — `gateway/nginx.conf`, `gateway/entrypoint.sh`, `.env.example`, `contexto.md` §6/§8/§9.
 - 2026-11-21 — Comentarios explicativos y docstrings en backend/gateway/migraciones/pruebas (sin cambios de lógica) y guía de lectura para quien solo conoce POO — `backend/`, `gateway/`, `docker-compose.yml`, `GUIA_LECTURA_CODIGO.txt`.
+- 2026-11-21 — RAG migrado de OpenRouter a Ollama local (`nomic-embed-text` + `qwen2.5:0.5b`): servicios `ollama`/`ollama-pull`, variables `OLLAMA_*`, reindexado auditado, prompt ajustado y pregunta oficial verificada — `docker-compose.yml`, `.env.example`, `backend/shared/embedding_client.py`, `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §4/§5.3/§6/§8/§9, `GUIA_LECTURA_CODIGO.txt`.

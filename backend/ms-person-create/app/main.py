@@ -95,7 +95,7 @@ async def crear_persona(
 
     await db.commit()
 
-    # Indexación vectorial: mejor esfuerzo, no bloquea el CRUD si OpenRouter falla.
+    # Indexación vectorial: mejor esfuerzo, no bloquea el CRUD si Ollama falla.
     # Es un bloque distinto del log: la persona ya quedó guardada, así que un
     # error aquí solo se avisa por logger y el endpoint responde 201 igual.
     try:

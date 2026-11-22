@@ -1,4 +1,5 @@
 {
+  "id": "KTgajEBwgIVpKDRy",
   "name": "RAG - Consulta de Personas",
   "nodes": [
     {
@@ -18,18 +19,17 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://openrouter.ai/api/v1/embeddings",
+        "url": "http://ollama:11434/v1/embeddings",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
             { "name": "Content-Type", "value": "application/json" }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_EMBED_MODEL, input: $json.chatInput, dimensions: Number($env.OPENROUTER_EMBED_DIMENSIONS) }) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_EMBED_MODEL, input: 'search_query: ' + $json.chatInput, dimensions: Number($env.OLLAMA_EMBED_DIMENSIONS) }) }}",
+        "options": { "timeout": 120000 }
       },
       "id": "a1000000-0000-4000-8000-000000000002",
       "name": "Embed pregunta",
@@ -85,7 +85,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const pregunta = $('Chat Trigger').first().json.chatInput;\nconst similares = $('Buscar similares').all().map((item) => item.json);\nconst agregados = $('Agregados').all().map((item) => item.json);\nconst contexto = JSON.stringify({ similares, agregados }, null, 2);\nreturn [{ json: { pregunta, contexto } }];"
+        "jsCode": "const pregunta = $('Chat Trigger').first().json.chatInput;\nconst similares = $('Buscar similares').all().map((item) => { const { similitud, ...persona } = item.json; return persona; });\nconst agregados = $('Agregados').all().map((item) => item.json);\nconst masJoven = agregados.find((item) => item.tipo === 'mas_joven');\nconst nombreMasJoven = masJoven ? [masJoven.primer_nombre, masJoven.segundo_nombre, masJoven.apellidos].filter(Boolean).join(' ') : '';\nconst contexto = JSON.stringify({ similares, nombre_mas_joven: nombreMasJoven, agregados }, null, 2);\nreturn [{ json: { pregunta, contexto } }];"
       },
       "id": "a1000000-0000-4000-8000-000000000006",
       "name": "Armar contexto",
@@ -96,21 +96,20 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "url": "http://ollama:11434/v1/chat/completions",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
             { "name": "Content-Type", "value": "application/json" }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_LLM_MODEL, messages: [ { role: 'system', content: 'Eres un asistente de gestión de datos personales. Responde en español, de forma breve y usando SOLO el contexto proporcionado. Si el contexto no contiene la respuesta, di que no hay información suficiente.' }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ] }) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_LLM_MODEL, messages: [ { role: 'system', content: 'Eres un asistente de gestión de datos personales. Responde en español, de forma breve y usando SOLO el contexto proporcionado. Cuando la pregunta pida identificar a una persona, responde únicamente con nombre_mas_joven si existe; si no, con el nombre completo usando primer_nombre y apellidos. No expliques, no repitas fechas y no menciones el campo similitud ni valores de distancia. Si el contexto no contiene la respuesta, di que no hay información suficiente.' }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ], temperature: 0 }) }}",
+        "options": { "timeout": 120000 }
       },
       "id": "a1000000-0000-4000-8000-000000000007",
-      "name": "LLM OpenRouter",
+      "name": "LLM Ollama",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [540, 300]
@@ -217,9 +216,9 @@
       "main": [[{ "node": "Armar contexto", "type": "main", "index": 0 }]]
     },
     "Armar contexto": {
-      "main": [[{ "node": "LLM OpenRouter", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "LLM Ollama", "type": "main", "index": 0 }]]
     },
-    "LLM OpenRouter": {
+    "LLM Ollama": {
       "main": [[{ "node": "Preparar respuesta", "type": "main", "index": 0 }]]
     },
     "Preparar respuesta": {

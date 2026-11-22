@@ -104,8 +104,8 @@ PASO 6 — IA Y BÚSQUEDA
        para poder responder "¿quién es el más joven?" (pregunta oficial).
   6.2  n8n/workflows/rag_consulta_personas.json
        JSON: no admite comentarios. El flujo es:
-       pregunta -> embedding (OpenRouter) -> búsqueda coseno en pgvector ->
-       LLM (openrouter/free) -> POST /api/v1/logs (RAG_QUERY con pregunta y
+       pregunta -> embedding (Ollama / nomic-embed-text) -> búsqueda coseno en pgvector ->
+       LLM (qwen2.5:0.5b) -> POST /api/v1/logs (RAG_QUERY con pregunta y
        respuesta) -> respuesta en el chat. Se explica también en contexto.md §6.
 
 PASO 7 — EL GATEWAY
@@ -147,8 +147,8 @@ PASO 9 — ESTADO Y DECISIONES
      el mismo Bearer y escribe la fila en `transaccion_logs`.
      Si falla -> rollback -> 503. Nunca queda una creación sin auditoría.
   8. `db.commit()` confirma la persona.
-  9. Se genera el embedding con OpenRouter y se guarda en `persona_embeddings`.
-     Si OpenRouter falla, solo se avisa por logger: el CRUD ya terminó bien.
+  9. Se genera el embedding con Ollama y se guarda en `persona_embeddings`.
+     Si Ollama falla, solo se avisa por logger: el CRUD ya terminó bien.
  10. Se responde 201 con los datos de la persona (sin los campos de control).
 
 El patrón se repite en UPDATE y DELETE; en READ no hay flush porque solo se lee.
