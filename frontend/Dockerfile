@@ -1,10 +1,9 @@
-# Imagen base para la SPA (React + Vite). El código de la interfaz se agregará
-# en una fase posterior; este Dockerfile deja el perfil `ui` listo para usarse.
+# Construye la SPA de React y sirve sus archivos estáticos desde Nginx.
 FROM node:22-alpine AS build
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
 RUN npm run build
 

@@ -145,7 +145,7 @@ Microservicios en contenedores Docker independientes, orquestados con Docker Com
 - **Auth:** SDK oficial `roble` (Universidad del Norte) con `AUTH_MODE=roble`; `AUTH_MODE=mock` para desarrollo sin contrato. JWT HS256 + `get_current_user`.
 - **IA / RAG:** n8n + **OpenRouter** (una sola key): embeddings `openai/text-embedding-3-small` a 768 dims (modelo validado el 2026-11-21 con la key del equipo; los `:free` dan 2048 dims o devuelven 503) y LLM `openrouter/free`. No se usa Ollama ni Gemini/Groq directamente.
 - **Fotos:** volumen `uploads_data`, `foto_url` relativa servida por `/uploads/`.
-- **Frontend:** diferido a una fase posterior; se activa con el perfil `ui` de Compose.
+- **Frontend:** SPA React + Vite implementada en `frontend/`, servida por Nginx y activable con el perfil `ui` de Compose. Usa React Hook Form + Zod, TanStack Query y `VITE_API_URL` (por defecto `/api/v1`, a través del gateway). Incluye acceso/registro, formularios de personas con foto, consulta por documento, eliminación confirmada, auditoría filtrable, estado de microservicios y enlace al chat nativo protegido de n8n.
 - **CI/CD:** GitHub + GitHub Actions (pruebas).
 
 ---
@@ -288,11 +288,11 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 
 > Completar y mantener. Marcar `[x]` solo cuando esté verificado en el repositorio.
 
-- [ ] R1 Autenticación ROBLE integrada (backend listo en `AUTH_MODE=mock`; pendiente ROBLE real con `ROBLE_CONTRACT_ID` y el frontend)
+- [ ] R1 Autenticación ROBLE integrada (frontend conectado a login/registro y backend listo en `AUTH_MODE=mock`; pendiente validar ROBLE real con `ROBLE_CONTRACT_ID`)
 - [x] R2 CRUD completo + log de todas las transacciones (verificado por HTTP: `CREATE`/`READ`/`UPDATE`/`DELETE`)
 - [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (verificado con la pregunta oficial el 2026-11-21)
-- [ ] R4 Formulario con todos los campos (frontend pendiente del modelo de UI)
-- [ ] R5 Validaciones en Zod y Pydantic (Pydantic listo; Zod pendiente del frontend)
+- [x] R4 Formulario con todos los campos (React Hook Form: identificación, nombres, nacimiento, género, correo, celular y foto opcional)
+- [x] R5 Validaciones en Zod y Pydantic (límites y reglas del formulario alineados con `backend/shared/schemas.py`)
 - [x] R6 Un microservicio por opción del menú
 - [x] R7 `ms-person-query` aislado y habilitable/deshabilitable (verificado: `503` al pararlo, otros servicios `200`)
 - [x] R8 `postgres-db` en contenedor independiente (+ migraciones Alembic, `Embedding` de 768 dims)
@@ -311,3 +311,4 @@ Formato: `AAAA-MM-DD — qué cambió — archivos/servicios afectados`
 - 2026-11-21 — Modelo de embeddings fijado a `openai/text-embedding-3-small` (768 dims) y LLM `openrouter/free` — `backend/shared/embedding_client.py`, `n8n/workflows/rag_consulta_personas.json`, `.env.example`.
 - 2026-11-21 — Basic-auth de n8n en el gateway, owner aprovisionado por env, credencial Postgres con `ssl: disable` y workflow publicado; fin del RAG verificado — `gateway/nginx.conf`, `gateway/entrypoint.sh`, `.env.example`, `contexto.md` §6/§8/§9.
 - 2026-11-21 — Comentarios explicativos y docstrings en backend/gateway/migraciones/pruebas (sin cambios de lógica) y guía de lectura para quien solo conoce POO — `backend/`, `gateway/`, `docker-compose.yml`, `GUIA_LECTURA_CODIGO.txt`.
+- 2026-11-21 — SPA profesional conectada a auth, CRUD, consulta, auditoría y chat n8n; formularios Zod y estado de servicios — `frontend/`, `contexto.md` §4/§9.
