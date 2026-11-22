@@ -3,7 +3,7 @@
 > **Fuente de verdad del proyecto.** Este archivo resume el enunciado oficial, la rúbrica, las decisiones de diseño del equipo y la guía de integración con ROBLE.
 > **Regla de mantenimiento:** si cambia cualquier cosa del proyecto (arquitectura, contenedores, rutas, tablas, validaciones, stack, estado de avance, decisiones), el agente DEBE actualizar este archivo en la misma tarea. Ver sección 9 (Registro de cambios).
 
-Última actualización: 2026-11-21
+Última actualización: 2026-11-22
 
 ---
 
@@ -201,19 +201,20 @@ La crea Alembic. Solo la usa `shared/roble_storage.py` cuando `AUTH_MODE=roble` 
 
 1. El usuario escribe la pregunta en el chat nativo de n8n (protegido con basic-auth y servido en `/n8n/`).
 2. `Embed pregunta` → OpenRouter `/embeddings` con el mismo modelo y `dimensions=768` que la indexación.
-3. `Buscar similares` → SQL con distancia coseno: `ORDER BY pe.embedding <=> '<vector>'::vector LIMIT 5`.
-4. `Agregados` → SQL adicional con `ORDER BY fecha_nacimiento DESC/ASC LIMIT 1` para responder preguntas de mínimo/máximo (riesgo #1).
-5. `LLM OpenRouter` → `POST /chat/completions` con `OPENROUTER_LLM_MODEL` y el contexto recuperado; se le obliga a responder en español y solo con ese contexto.
-6. `Token de servicio` → `POST /api/v1/auth/service-token` con `X-Service-Key`; el JWT devuelto se usa como Bearer.
-7. `Registrar RAG_QUERY` → `POST /api/v1/logs` con `detalle: {pregunta, respuesta}`; `ms-logs` inserta en `transaccion_logs` y responde `201 Created`.
-8. `Respuesta al chat` devuelve el texto; se ve en el widget de n8n.
+3. `Buscar similares` → SQL con distancia coseno: `ORDER BY pe.embedding <=> '<vector>'::vector LIMIT 5`. Estas coincidencias son contexto auxiliar, no una fuente para conteos ni para confirmar identidad.
+4. `Preparar consulta` extrae de forma acotada un nombre/documento, un filtro de edad y campos no disponibles. `Agregados` usa parámetros SQL enlazados para consultar el total, conteos por género, promedio de edad, persona más joven/mayor, último registro, coincidencias exactas y hasta 20 resultados filtrados por edad.
+5. `Armar contexto` entrega los resultados agregados y semánticos; `Instrucciones` arma reglas cortas en campos separados para mantener legible el JSON. `LLM OpenRouter` responde desde los resultados SQL y no estima usando el top-5.
+6. El RAG permite preguntar por correo, celular, documento, edad y fecha de registro al indicar el nombre o documento de la persona; también responde conteos, género, promedio de edad, extremos, último registro, filtros por edad y verificación de registro. Dirección, ciudad y cargo/área no existen en el modelo actual: el asistente informa esa limitación y no infiere esos datos.
+7. `Token de servicio` → `POST /api/v1/auth/service-token` con `X-Service-Key`; el JWT devuelto se usa como Bearer.
+8. `Registrar RAG_QUERY` → `POST /api/v1/logs` con `detalle: {pregunta, respuesta}`; `ms-logs` inserta en `transaccion_logs` y responde `201 Created`.
+9. `Respuesta al chat` devuelve el texto; se ve en el widget de n8n.
 
 Pregunta de prueba oficial: *"¿Cuál es el empleado más joven que se ha registrado?"* => debe responder el nombre y dejar un `RAG_QUERY` en el log. **Verificado el 2026-11-21:** respuesta `El empleado más joven registrado es **Pedro Pérez Gómez**, nacido el **20 de marzo de 2005**.` y un `RAG_QUERY` con `detalle: {pregunta, respuesta}` en `transaccion_logs`.
 
 **Configuración de la instancia n8n (2026-11-21):**
 - El owner se aprovisiona al arrancar con `N8N_INSTANCE_OWNER_MANAGED_BY_ENV=true` y `N8N_INSTANCE_OWNER_EMAIL=admin@proyecto.local` (el hash bcrypt se genera desde `N8N_PASSWORD` y se guarda escapando `$` como `$$` en `.env`). Así se evita el asistente inicial y se puede usar la API REST.
 - La credencial Postgres `gestion_personas` apunta a `postgres-db:5432/gestion_personas`, usuario `admin` y password el default de Compose (`POSTGRES_PASSWORD`, por defecto `admin123`). El campo `ssl` debe ser el string **`disable`** (no el booleano `false`), o n8n 2.x falla con `The server does not support SSL connections`.
-- El workflow se versiona en `n8n/workflows/rag_consulta_personas.json` con el placeholder `__POSTGRES_CREDENTIAL_ID__`; al importar se sustituye por el id real de la credencial (n8n CLI `import:workflow` + `publish:workflow`). Id del workflow: `KTgajEBwgIVpKDRy`, publicado/activo.
+- El workflow se versiona en `n8n/workflows/rag_consulta_personas.json` con el placeholder `__POSTGRES_CREDENTIAL_ID__`; al importar se sustituye por el id real de la credencial (n8n CLI `import:workflow` + `publish:workflow`). Id observado en la instancia activa: `qNOg7qbLykYHNxen`, publicado/activo.
 - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` es necesario porque los nodos Code leen `$env.OPENROUTER_*` (n8n 2.x lo bloquea por defecto).
 - El webhook real del chat es `/n8n/webhook/chat-rag-consulta-personas/chat` (el sufijo `/chat` lo añade el nodo Chat Trigger; la API de n8n lo registra en `webhook_entity`).
 - El gateway reescribe `/n8n/` con `proxy_pass http://n8n_service/;` (barra final) para que `/n8n/rest/...` llegue como `/rest/...`; sin ella la API REST caía en el HTML del editor.
@@ -272,7 +273,7 @@ async def consultar_persona(
 
 Resolver y registrar la decisión tomada en el registro de cambios.
 
-1. **RAG vs. preguntas agregadas — RESUELTO (2026-11-21).** El texto embebido incluye fecha de nacimiento y el workflow ejecuta además una consulta SQL `ORDER BY fecha_nacimiento DESC/ASC LIMIT 1`, cuyo resultado se entrega al LLM junto al top-5 vectorial. Se prueba siempre con la pregunta oficial.
+1. **RAG vs. preguntas agregadas — RESUELTO (2026-11-22).** El workflow usa SQL para conteos por género, promedio, extremos, último registro, búsquedas exactas y filtros de edad; la búsqueda semántica top-5 es auxiliar. Los campos que no existen (dirección, ciudad y cargo/área) se declaran como no disponibles. Se prueba siempre con la pregunta oficial y con preguntas de cantidad.
 2. **Esquema de `persona_embeddings` — RESUELTO (2026-11-21).** Ver §5.3: `VECTOR(768)`, texto con nombres/documento/fecha/género e índice HNSW coseno.
 3. **Quién genera los embeddings — RESUELTO (2026-11-21).** Los generan `ms-person-create` y `ms-person-update` de forma asíncrona y mejor esfuerzo; `ms-person-delete` depende del `ON DELETE CASCADE`. n8n solo embebe la pregunta.
 4. **Formato `dd-mmm-yyyy` — RESUELTO (2026-11-21).** Meses en español: `ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic`. Implementado en `shared/schemas.py`; Zod deberá replicarlo.
@@ -290,7 +291,7 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 
 - [ ] R1 Autenticación ROBLE integrada (frontend conectado a login/registro y backend listo en `AUTH_MODE=mock`; pendiente validar ROBLE real con `ROBLE_CONTRACT_ID`)
 - [x] R2 CRUD completo + log de todas las transacciones (verificado por HTTP: `CREATE`/`READ`/`UPDATE`/`DELETE`)
-- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (verificado con la pregunta oficial el 2026-11-21)
+- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (workflow ampliado con consultas personales, agregados y filtros; las respuestas con registros reales requieren validación manual en n8n)
 - [x] R4 Formulario con todos los campos (React Hook Form: identificación, nombres, nacimiento, género, correo, celular y foto opcional)
 - [x] R5 Validaciones en Zod y Pydantic (límites y reglas del formulario alineados con `backend/shared/schemas.py`)
 - [x] R6 Un microservicio por opción del menú
@@ -312,3 +313,5 @@ Formato: `AAAA-MM-DD — qué cambió — archivos/servicios afectados`
 - 2026-11-21 — Basic-auth de n8n en el gateway, owner aprovisionado por env, credencial Postgres con `ssl: disable` y workflow publicado; fin del RAG verificado — `gateway/nginx.conf`, `gateway/entrypoint.sh`, `.env.example`, `contexto.md` §6/§8/§9.
 - 2026-11-21 — Comentarios explicativos y docstrings en backend/gateway/migraciones/pruebas (sin cambios de lógica) y guía de lectura para quien solo conoce POO — `backend/`, `gateway/`, `docker-compose.yml`, `GUIA_LECTURA_CODIGO.txt`.
 - 2026-11-21 — SPA profesional conectada a auth, CRUD, consulta, auditoría y chat n8n; formularios Zod y estado de servicios — `frontend/`, `contexto.md` §4/§9.
+- 2026-11-21 — El RAG añade conteo exacto de personas y guía al LLM para no inferirlo desde coincidencias semánticas; se alinea el ID activo de la instancia — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§8.
+- 2026-11-22 — El RAG añade consultas por persona, estadísticas, filtros de edad y límites explícitos del esquema; prompts y SQL se separan en fragmentos legibles — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§8/§9.
