@@ -34,6 +34,7 @@ pnpm-debug.log*
 # ARCHIVOS SUBIDOS Y DATOS LOCALES
 uploads/
 backend/uploads/
+datos_ini/
 postgres_data/
 n8n_data/
 ollama_data/
