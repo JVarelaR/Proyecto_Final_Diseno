@@ -78,7 +78,7 @@ class PersonaEmbedding(Base):
     """Texto indexado de una persona + su vector para búsqueda por similitud.
 
     Se guarda en tabla separada (1:1 con `personas`) para no mezclar el dato
-    operativo con el índice vectorial: si falla OpenRouter, el CRUD sigue vivo.
+    operativo con el índice vectorial: si falla Ollama, el CRUD sigue vivo.
     """
 
     __tablename__ = "persona_embeddings"
@@ -91,10 +91,9 @@ class PersonaEmbedding(Base):
         nullable=False,
     )
     contenido_texto = Column(Text, nullable=False)
-    # 768 es el tamaño fijo acordado con el proveedor actual (OpenRouter,
-    # `openai/text-embedding-3-small` con dimensions=768). Si cambia el modelo,
-    # hay que reindexar: este número debe coincidir con la migración y con
-    # `EMBED_DIMENSIONS` de `shared.embedding_client` (contexto.md §8).
+    # 768 es el tamaño nativo del modelo local `nomic-embed-text` (Ollama).
+    # Si cambia el modelo hay que reindexar: este número debe coincidir con la
+    # migración y con `EMBED_DIMENSIONS` de `shared.embedding_client` (contexto.md §8).
     embedding = Column(Vector(768), nullable=False)
 
 
