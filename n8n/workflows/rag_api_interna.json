@@ -26,7 +26,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        240,
+        96,
         0
       ]
     },
@@ -39,7 +39,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        480,
+        400,
         0
       ]
     },
@@ -54,7 +54,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        720,
+        672,
         0
       ],
       "credentials": {
@@ -67,7 +67,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "\nWITH total AS MATERIALIZED (\n    SELECT COUNT(*)::integer AS total_personas\n    FROM personas\n),\nextremos AS (\n    (\n        SELECT\n            'mas_joven' AS tipo,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento DESC NULLS LAST\n        LIMIT 1\n    )\n\n    UNION ALL\n\n    (\n        SELECT\n            'mas_mayor' AS tipo,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento ASC NULLS LAST\n        LIMIT 1\n    )\n)\nSELECT\n    e.tipo,\n    e.primer_nombre,\n    e.segundo_nombre,\n    e.apellidos,\n    e.fecha_nacimiento,\n    t.total_personas\nFROM extremos AS e\nCROSS JOIN total AS t;\n",
+        "query": "WITH total AS MATERIALIZED (\n    SELECT COUNT(*)::integer AS total_personas\n    FROM personas\n),\nextremos AS (\n    (\n        SELECT\n            'mas_joven' AS tipo,\n            numero_documento,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento DESC NULLS LAST\n        LIMIT 1\n    )\n\n    UNION ALL\n\n    (\n        SELECT\n            'mas_mayor' AS tipo,\n            numero_documento,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento ASC NULLS LAST\n        LIMIT 1\n    )\n)\nSELECT\n    e.tipo,\n    e.numero_documento,\n    e.primer_nombre,\n    e.segundo_nombre,\n    e.apellidos,\n    e.fecha_nacimiento,\n    t.total_personas\nFROM extremos AS e\nCROSS JOIN total AS t;\n",
         "options": {}
       },
       "id": "3a51d60a-1cfc-46cc-b91f-7e0888f5f939",
@@ -75,7 +75,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        960,
+        880,
         0
       ],
       "executeOnce": true,
@@ -88,14 +88,14 @@
     },
     {
       "parameters": {
-        "jsCode": "const solicitud = $('Webhook').first().json.body;\n\nconst pregunta = solicitud.pregunta || '';\nconst sessionId = solicitud.session_id || '';\nconst usuarioId = solicitud.usuario_id || '';\n\nif (typeof solicitud.pregunta !== 'string' || !solicitud.pregunta.trim()) {\n  throw new Error('La pregunta no puede estar vacía');\n}\n\n// Personas recuperadas mediante búsqueda vectorial\nconst similares = $('Buscar similares').all().map(item => {\n  const { similitud, ...persona } = item.json;\n  return persona;\n});\n\n// Resultados de las consultas SQL de agregación\nconst agregados = $('Agregados').all().map(item => item.json);\n\n// Persona más joven\nconst masJoven = agregados.find(\n  item => item.tipo === 'mas_joven'\n);\n\n// Persona de mayor edad\nconst masMayor = agregados.find(\n  item => item.tipo === 'mas_mayor'\n);\n\nfunction nombreCompleto(persona) {\n  if (!persona) return null;\n\n  return [\n    persona.primer_nombre,\n    persona.segundo_nombre,\n    persona.apellidos\n  ].filter(Boolean).join(' ');\n}\n\n// Cantidad real de personas registrada en PostgreSQL\nconst totalPersonas =\n  agregados.length > 0 &&\n  agregados[0].total_personas != null\n    ? Number(agregados[0].total_personas)\n    : null;\n\n// Contexto estructurado para Ollama\nconst datosContexto = {\n  total_personas: totalPersonas,\n\n  nombre_mas_joven: nombreCompleto(masJoven),\n\n  nombre_mas_mayor: nombreCompleto(masMayor),\n\n  persona_mas_joven: masJoven || null,\n\n  persona_mas_mayor: masMayor || null,\n\n  similares\n};\n\nconst contexto = JSON.stringify(datosContexto, null, 2);\n\nreturn [{\n  json: {\n    pregunta,\n    sessionId,\n    usuarioId,\n    total_personas: totalPersonas,\n    contexto\n  }\n}];"
+        "jsCode": "\nconst solicitud = $('Webhook').first().json.body;\n\nconst pregunta = solicitud.pregunta || '';\nconst sessionId = solicitud.session_id || '';\nconst usuarioId = solicitud.usuario_id || '';\n\nif (\n  typeof solicitud.pregunta !== 'string' ||\n  !solicitud.pregunta.trim()\n) {\n  throw new Error('La pregunta no puede estar vacía');\n}\n\nconst similares = $('Buscar similares')\n  .all()\n  .map(item => {\n    const { similitud, ...persona } = item.json;\n    return persona;\n  });\n\nconst agregados = $('Agregados')\n  .all()\n  .map(item => item.json);\n\nconst masJoven =\n  agregados.find(item => item.tipo === 'mas_joven') || null;\n\nconst masMayor =\n  agregados.find(item => item.tipo === 'mas_mayor') || null;\n\nconst recordados = $('Recuperar persona recordada')\n  .all()\n  .map(item => item.json)\n  .filter(item => item.numero_documento != null);\n\nconst personaRecordada = recordados[0] || null;\n\nfunction nombreCompleto(persona) {\n  if (!persona) return null;\n\n  return [\n    persona.primer_nombre,\n    persona.segundo_nombre,\n    persona.apellidos\n  ].filter(Boolean).join(' ');\n}\n\nfunction normalizarTexto(texto) {\n  return String(texto)\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nconst preguntaNormalizada = normalizarTexto(pregunta);\n\nconst consultaJoven =\n  /\\b(mas joven|menor edad|persona mas joven)\\b/\n    .test(preguntaNormalizada);\n\nconst consultaMayor =\n  /\\b(mas mayor|mayor edad|mas vieja|mas viejo|persona mayor)\\b/\n    .test(preguntaNormalizada);\n\nconst preguntaSeguimiento =\n  /\\b(y cuando|cuando nacio|fecha de nacimiento|cuantos anos|que edad|y donde|y cual|y su|de esa persona|de el|de ella)\\b/\n    .test(preguntaNormalizada);\n\nlet tipoConsulta = 'general';\nlet personaIdentificada = null;\n\nif (consultaJoven && !consultaMayor) {\n  tipoConsulta = 'mas_joven';\n  personaIdentificada = masJoven;\n\n} else if (consultaMayor && !consultaJoven) {\n  tipoConsulta = 'mas_mayor';\n  personaIdentificada = masMayor;\n\n} else if (preguntaSeguimiento && personaRecordada) {\n  tipoConsulta = 'seguimiento';\n  personaIdentificada = personaRecordada;\n}\n\nconst personaDocumento =\n  personaIdentificada?.numero_documento != null\n    ? String(personaIdentificada.numero_documento)\n    : null;\n\nconst totalPersonas =\n  agregados.length > 0 &&\n  agregados[0].total_personas != null\n    ? Number(agregados[0].total_personas)\n    : null;\n\nconst datosContexto = {\n  total_personas: totalPersonas,\n  tipo_consulta: tipoConsulta,\n  persona_identificada: personaIdentificada,\n  persona_recordada: personaRecordada,\n  persona_mas_joven: masJoven,\n  persona_mas_mayor: masMayor,\n  similares\n};\n\nconst contexto = JSON.stringify(datosContexto, null, 2);\n\nreturn [{\n  json: {\n    pregunta,\n    sessionId,\n    usuarioId,\n    tipo_consulta: tipoConsulta,\n    total_personas: totalPersonas,\n    persona_documento: personaDocumento,\n    contexto\n  }\n}];\n"
       },
       "id": "b256e0c3-e7b0-42c9-b862-3671b12184a6",
       "name": "Armar contexto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1200,
+        1248,
         0
       ]
     },
@@ -135,7 +135,7 @@
             {
               "id": "asg-texto-respuesta",
               "name": "texto",
-              "value": "={{ $json.choices[0].message.content }}",
+              "value": "={{\n(() => {\n  const datos = $('Armar contexto').first().json;\n  const respuestaIA = $json.choices?.[0]?.message?.content || '';\n  const contexto = JSON.parse(datos.contexto || '{}');\n\n  const pregunta = String(datos.pregunta || '')\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '');\n\n  const persona = contexto.persona_identificada;\n\n  if (!persona || !persona.numero_documento) {\n    return respuestaIA;\n  }\n\n  const nombre = [\n    persona.primer_nombre,\n    persona.segundo_nombre,\n    persona.apellidos\n  ].filter(Boolean).join(' ');\n\n  // Respuesta exacta a preguntas sobre nacimiento.\n  if (\n    /cuando nacio|fecha de nacimiento|cuando nacio esa persona|en que fecha nacio/.test(pregunta)\n  ) {\n    if (!persona.fecha_nacimiento) {\n      return `No tengo registrada la fecha de nacimiento de ${nombre}.`;\n    }\n\n    const fecha = String(persona.fecha_nacimiento).slice(0, 10);\n    const partes = fecha.split('-').map(Number);\n\n    const meses = [\n      'enero', 'febrero', 'marzo', 'abril',\n      'mayo', 'junio', 'julio', 'agosto',\n      'septiembre', 'octubre', 'noviembre', 'diciembre'\n    ];\n\n    if (\n      partes.length === 3 &&\n      partes[1] >= 1 &&\n      partes[1] <= 12\n    ) {\n      return `${nombre} nació el ${partes[2]} de ${meses[partes[1] - 1]} de ${partes[0]}.`;\n    }\n  }\n\n  // Para las demás preguntas, conservar la respuesta de Ollama.\n  return respuestaIA;\n})()\n}}",
               "type": "string"
             }
           ]
@@ -217,7 +217,7 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.2,
       "position": [
-        0,
+        -144,
         0
       ],
       "id": "59e155a6-e46d-40cc-bf43-3e1374fdb2e8",
@@ -233,7 +233,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({\n  respuesta: $('Preparar respuesta').first().json.texto,\n  session_id: $('Armar contexto').first().json.sessionId\n}) }}",
+        "responseBody": "={{ JSON.stringify({\n  respuesta: $('Preparar respuesta').first().json.texto,\n  session_id: $('Armar contexto').first().json.sessionId,\n  persona_documento: $('Armar contexto').first().json.persona_documento\n}) }}",
         "options": {
           "responseCode": 200
         }
@@ -246,6 +246,31 @@
       ],
       "id": "4243f496-4a1c-42ef-8528-08d0a6f4fb96",
       "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    numero_documento,\n    primer_nombre,\n    segundo_nombre,\n    apellidos,\n    fecha_nacimiento\nFROM personas\nWHERE numero_documento = $1\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ $('Webhook').first().json.body.persona_documento || 'SIN_PERSONA' }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1056,
+        0
+      ],
+      "id": "06b6e843-57cc-4f11-a410-52e1c91bc9b2",
+      "name": "Recuperar persona recordada",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "gbfREeZH2VYQxSiu",
+          "name": "Postgres account"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -287,7 +312,7 @@
       "main": [
         [
           {
-            "node": "Armar contexto",
+            "node": "Recuperar persona recordada",
             "type": "main",
             "index": 0
           }
@@ -359,14 +384,25 @@
           }
         ]
       ]
+    },
+    "Recuperar persona recordada": {
+      "main": [
+        [
+          {
+            "node": "Armar contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "c319c369-86a3-4c64-b256-f2a7f42f937d",
+  "versionId": "50406e58-f6a7-474d-8aff-8b9d3be959ea",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "9b50f52de79c34c8b0bfebcc8bb088aa13062cd36d48fba9230ea9c2f0bc714c"
