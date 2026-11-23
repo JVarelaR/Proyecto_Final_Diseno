@@ -77,8 +77,8 @@
       ],
       "credentials": {
         "postgres": {
-          "id": "7w8iR8FMQhU6RHBC",
-          "name": "Postgres account"
+          "id": "__POSTGRES_CREDENTIAL_ID__",
+          "name": "gestion_personas"
         }
       }
     },
@@ -440,8 +440,8 @@
       ],
       "credentials": {
         "postgres": {
-          "id": "7w8iR8FMQhU6RHBC",
-          "name": "Postgres account"
+          "id": "__POSTGRES_CREDENTIAL_ID__",
+          "name": "gestion_personas"
         }
       }
     },

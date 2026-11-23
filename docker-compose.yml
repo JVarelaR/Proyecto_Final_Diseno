@@ -237,6 +237,9 @@ services:
       N8N_PATH: /n8n/
       WEBHOOK_URL: http://localhost/n8n/
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-America/Bogota}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      OLLAMA_EMBED_DIMENSIONS: ${OLLAMA_EMBED_DIMENSIONS:-768}
+      OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-qwen2.5:0.5b}
       # Metadatos de n8n en su propia BD; los datos de personas se consultan
       # desde el workflow con una credencial separada a gestion_personas.
       DB_TYPE: postgresdb
