@@ -1,0 +1,377 @@
+{
+  "name": "RAG - API Interna",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $env.OLLAMA_EMBED_MODEL,\n  input: String($('Webhook').first().json.body.pregunta ?? ''),\n  dimensions: Number($env.OLLAMA_EMBED_DIMENSIONS)\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "53782e84-de77-446e-9d97-f06a5e493638",
+      "name": "Embed pregunta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const vector = $json.data[0].embedding;\nconst literal = '[' + vector.join(',') + ']';\nconst sql = \"SELECT p.numero_documento, p.primer_nombre, p.segundo_nombre, p.apellidos, p.fecha_nacimiento, 1 - (pe.embedding <=> '\" + literal + \"'::vector) AS similitud FROM persona_embeddings pe JOIN personas p ON p.numero_documento = pe.numero_documento ORDER BY pe.embedding <=> '\" + literal + \"'::vector LIMIT 5\";\nreturn [{ json: { sql } }];"
+      },
+      "id": "00d2313c-8a21-4a4e-a010-70ab72cebfd3",
+      "name": "SQL vectorial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {}
+      },
+      "id": "951ee457-d391-4344-8d7b-83adab9e226b",
+      "name": "Buscar similares",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        720,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "gbfREeZH2VYQxSiu",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "\nWITH total AS MATERIALIZED (\n    SELECT COUNT(*)::integer AS total_personas\n    FROM personas\n),\nextremos AS (\n    (\n        SELECT\n            'mas_joven' AS tipo,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento DESC NULLS LAST\n        LIMIT 1\n    )\n\n    UNION ALL\n\n    (\n        SELECT\n            'mas_mayor' AS tipo,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento ASC NULLS LAST\n        LIMIT 1\n    )\n)\nSELECT\n    e.tipo,\n    e.primer_nombre,\n    e.segundo_nombre,\n    e.apellidos,\n    e.fecha_nacimiento,\n    t.total_personas\nFROM extremos AS e\nCROSS JOIN total AS t;\n",
+        "options": {}
+      },
+      "id": "3a51d60a-1cfc-46cc-b91f-7e0888f5f939",
+      "name": "Agregados",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        0
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "gbfREeZH2VYQxSiu",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const solicitud = $('Webhook').first().json.body;\n\nconst pregunta = solicitud.pregunta || '';\nconst sessionId = solicitud.session_id || '';\nconst usuarioId = solicitud.usuario_id || '';\n\nif (typeof solicitud.pregunta !== 'string' || !solicitud.pregunta.trim()) {\n  throw new Error('La pregunta no puede estar vacía');\n}\n\n// Personas recuperadas mediante búsqueda vectorial\nconst similares = $('Buscar similares').all().map(item => {\n  const { similitud, ...persona } = item.json;\n  return persona;\n});\n\n// Resultados de las consultas SQL de agregación\nconst agregados = $('Agregados').all().map(item => item.json);\n\n// Persona más joven\nconst masJoven = agregados.find(\n  item => item.tipo === 'mas_joven'\n);\n\n// Persona de mayor edad\nconst masMayor = agregados.find(\n  item => item.tipo === 'mas_mayor'\n);\n\nfunction nombreCompleto(persona) {\n  if (!persona) return null;\n\n  return [\n    persona.primer_nombre,\n    persona.segundo_nombre,\n    persona.apellidos\n  ].filter(Boolean).join(' ');\n}\n\n// Cantidad real de personas registrada en PostgreSQL\nconst totalPersonas =\n  agregados.length > 0 &&\n  agregados[0].total_personas != null\n    ? Number(agregados[0].total_personas)\n    : null;\n\n// Contexto estructurado para Ollama\nconst datosContexto = {\n  total_personas: totalPersonas,\n\n  nombre_mas_joven: nombreCompleto(masJoven),\n\n  nombre_mas_mayor: nombreCompleto(masMayor),\n\n  persona_mas_joven: masJoven || null,\n\n  persona_mas_mayor: masMayor || null,\n\n  similares\n};\n\nconst contexto = JSON.stringify(datosContexto, null, 2);\n\nreturn [{\n  json: {\n    pregunta,\n    sessionId,\n    usuarioId,\n    total_personas: totalPersonas,\n    contexto\n  }\n}];"
+      },
+      "id": "b256e0c3-e7b0-42c9-b862-3671b12184a6",
+      "name": "Armar contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=\n{{ JSON.stringify({\n  model: $env.OLLAMA_LLM_MODEL,\n  messages: [\n    {\n      role: 'system',\n      content: `Eres un asistente de consulta de datos personales.\n\nREGLAS:\n1. Responde siempre en español, de forma clara y precisa.\n2. Utiliza únicamente la información del contexto proporcionado.\n3. Identifica a la persona mencionada en la pregunta antes de responder.\n4. No confundas los datos de distintas personas.\n5. Si preguntan por una persona, proporciona únicamente los datos solicitados.\n6. Si preguntan por una fecha de nacimiento, utiliza fecha_nacimiento.\n7. Si preguntan por la persona más joven, utiliza nombre_mas_joven cuando esté disponible.\n8. Si preguntan por la persona de mayor edad, utiliza los datos de tipo mas_mayor.\n9. Si preguntan cuántas personas existen, no confundas la cantidad de resultados similares con el total de registros.\n10. Si la pregunta hace referencia a una persona mencionada anteriormente y el contexto no permite identificarla, solicita una aclaración.\n11. No inventes información ni utilices datos de personas que no correspondan a la pregunta.\n12. No muestres identificadores personales completos salvo que la solicitud esté autorizada y el sistema haya verificado ese permiso.\n13. No menciones similitudes vectoriales ni detalles técnicos innecesarios.\n14. Si falta información para responder, indícalo brevemente.\n\nResponde exclusivamente a la pregunta del usuario.`\n    },\n    {\n      role: 'user',\n      content: 'Pregunta: ' + $json.pregunta +\n               '\\nContexto: ' + $json.contexto\n    }\n  ],\n  temperature: 0\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "86799254-087e-40ed-865e-e44aa7f2bc4f",
+      "name": "LLM Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "asg-texto-respuesta",
+              "name": "texto",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0da6bf3a-3b69-4310-974d-47f10431a053",
+      "name": "Preparar respuesta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ms-auth:8000/api/v1/auth/service-token",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Service-Key",
+              "value": "={{ $env.SERVICE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1e5b4645-41e4-40c7-bf5e-b014185a7cf8",
+      "name": "Token de servicio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ms-logs:8000/api/v1/logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tipo_transaccion: 'RAG_QUERY', detalle: { pregunta: $('Armar contexto').first().json.pregunta, respuesta: $('Preparar respuesta').first().json.texto } }) }}",
+        "options": {}
+      },
+      "id": "791e4b34-f980-46f8-a8f9-daed39bbd77c",
+      "name": "Registrar RAG_QUERY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-api-interna",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "59e155a6-e46d-40cc-bf43-3e1374fdb2e8",
+      "name": "Webhook",
+      "webhookId": "138c874c-a14f-45ee-a763-c4a78933bd19",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "EppL2Z2NXznODHic",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  respuesta: $('Preparar respuesta').first().json.texto,\n  session_id: $('Armar contexto').first().json.sessionId\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2368,
+        0
+      ],
+      "id": "4243f496-4a1c-42ef-8528-08d0a6f4fb96",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Embed pregunta": {
+      "main": [
+        [
+          {
+            "node": "SQL vectorial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL vectorial": {
+      "main": [
+        [
+          {
+            "node": "Buscar similares",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar similares": {
+      "main": [
+        [
+          {
+            "node": "Agregados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agregados": {
+      "main": [
+        [
+          {
+            "node": "Armar contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar contexto": {
+      "main": [
+        [
+          {
+            "node": "LLM Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Ollama": {
+      "main": [
+        [
+          {
+            "node": "Preparar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar respuesta": {
+      "main": [
+        [
+          {
+            "node": "Token de servicio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token de servicio": {
+      "main": [
+        [
+          {
+            "node": "Registrar RAG_QUERY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar RAG_QUERY": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Embed pregunta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "c319c369-86a3-4c64-b256-f2a7f42f937d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b50f52de79c34c8b0bfebcc8bb088aa13062cd36d48fba9230ea9c2f0bc714c"
+  },
+  "nodeGroups": [],
+  "id": "2xlm4foWGeyfoi49",
+  "tags": []
+}
