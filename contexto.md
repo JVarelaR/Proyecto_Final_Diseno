@@ -143,7 +143,7 @@ Microservicios en contenedores Docker independientes, orquestados con Docker Com
 - **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async) + Alembic.
 - **BD:** PostgreSQL + pgvector. Local en Docker y Supabase (gratis) para nube, con las mismas migraciones.
 - **Auth:** SDK oficial `roble` (Universidad del Norte) con `AUTH_MODE=roble`; `AUTH_MODE=mock` para desarrollo sin contrato. JWT HS256 + `get_current_user`.
-- **IA / RAG:** n8n + **OpenRouter** (una sola key): embeddings `openai/text-embedding-3-small` a 768 dims (modelo validado el 2026-11-21 con la key del equipo; los `:free` dan 2048 dims o devuelven 503) y LLM `openrouter/free`. No se usa Ollama ni Gemini/Groq directamente.
+- **IA / RAG:** n8n + **Ollama local** (sin API key externa): embeddings `nomic-embed-text` de 768 dimensiones y LLM indicado por `OLLAMA_LLM_MODEL` (Compose usa `qwen2.5:0.5b` si no se configura). El servicio Ollama solo es accesible en la red Docker.
 - **Fotos:** volumen `uploads_data`, `foto_url` relativa servida por `/uploads/`.
 - **Frontend:** SPA React + Vite implementada en `frontend/`, servida por Nginx y activable con el perfil `ui` de Compose. Usa React Hook Form + Zod, TanStack Query y `VITE_API_URL` (por defecto `/api/v1`, a través del gateway). Incluye acceso/registro, formularios de personas con foto, consulta por documento, eliminación confirmada, auditoría filtrable, estado de microservicios y enlace al chat nativo protegido de n8n.
 - **CI/CD:** GitHub + GitHub Actions (pruebas).
@@ -180,7 +180,7 @@ Microservicios en contenedores Docker independientes, orquestados con Docker Com
 
 ### 5.3 `persona_embeddings`
 
-Tabla con vectores (pgvector) usada por el RAG, definida en la migración inicial. Columnas: `id` UUID PK, `numero_documento` VARCHAR(10) FK→`personas` ON DELETE CASCADE (UNIQUE), `contenido_texto` TEXT y `embedding` VECTOR(768). Índice HNSW `ix_persona_embeddings_vector` con distancia coseno. La dimensión 768 corresponde al modelo de embeddings de OpenRouter configurado en `OPENROUTER_EMBED_DIMENSIONS`. Modelo SQLAlchemy: `PersonaEmbedding` en `shared.models`. La indexan `ms-person-create` y `ms-person-update` (mejor esfuerzo); `ms-person-delete` borra por cascade.
+Tabla con vectores (pgvector) usada por el RAG, definida en la migración inicial. Columnas: `id` UUID PK, `numero_documento` VARCHAR(10) FK→`personas` ON DELETE CASCADE (UNIQUE), `contenido_texto` TEXT y `embedding` VECTOR(768). Índice HNSW `ix_persona_embeddings_vector` con distancia coseno. La dimensión 768 corresponde a `nomic-embed-text`, configurado mediante `OLLAMA_EMBED_DIMENSIONS`. Modelo SQLAlchemy: `PersonaEmbedding` en `shared.models`. La indexan `ms-person-create` y `ms-person-update` (mejor esfuerzo); `ms-person-delete` borra por cascade.
 
 ### 5.4 `roble_token_storage`
 
@@ -195,16 +195,17 @@ La crea Alembic. Solo la usa `shared/roble_storage.py` cuando `AUTH_MODE=roble` 
 
 ## 6. Flujo RAG en n8n
 
-**Indexación (write path):** `ms-person-create` y `ms-person-update` generan el embedding con `POST {OPENROUTER_BASE_URL}/embeddings` (modelo `OPENROUTER_EMBED_MODEL`, `dimensions=768`) sobre un texto que incluye nombres, documento, fecha de nacimiento y género, y hacen UPSERT en `persona_embeddings`. `ms-person-delete` borra por `ON DELETE CASCADE`. Si OpenRouter falla, el CRUD no se bloquea (mejor esfuerzo).
+**Indexación (write path):** `ms-person-create` y `ms-person-update` generan el embedding con `POST {OLLAMA_BASE_URL}/v1/embeddings` (modelo `OLLAMA_EMBED_MODEL`, `dimensions=768`) sobre un texto que incluye nombres, documento, fecha de nacimiento y género, y hacen UPSERT en `persona_embeddings`. `ms-person-delete` borra por `ON DELETE CASCADE`. Si Ollama falla, el CRUD no se bloquea (mejor esfuerzo).
 
 **Consulta (read path, workflow `n8n/workflows/rag_consulta_personas.json`):**
 
 1. El usuario escribe la pregunta en el chat nativo de n8n (protegido con basic-auth y servido en `/n8n/`).
-2. `Embed pregunta` → OpenRouter `/embeddings` con el mismo modelo y `dimensions=768` que la indexación.
+2. `Embed pregunta` → Ollama `/v1/embeddings` con `OLLAMA_EMBED_MODEL` y `OLLAMA_EMBED_DIMENSIONS`, iguales a los usados en la indexación.
 3. `Buscar similares` → SQL con distancia coseno: `ORDER BY pe.embedding <=> '<vector>'::vector LIMIT 5`. Estas coincidencias son contexto auxiliar, no una fuente para conteos ni para confirmar identidad.
 4. `Preparar consulta` extrae de forma acotada un nombre/documento, un filtro de edad y campos no disponibles. `Agregados` usa parámetros SQL enlazados para consultar el total, conteos por género, promedio de edad, persona más joven/mayor, último registro, coincidencias exactas y hasta 20 resultados filtrados por edad.
-5. `Armar contexto` entrega los resultados agregados y semánticos; `Instrucciones` arma reglas cortas en campos separados para mantener legible el JSON. `LLM OpenRouter` responde desde los resultados SQL y no estima usando el top-5.
+5. `Armar contexto` entrega los resultados agregados y semánticos; `Instrucciones` arma reglas en campos separados. `LLM Ollama` responde desde los resultados SQL, con tono natural y breve, sin detallar el proceso ni revelar datos personales no solicitados. `Preparar respuesta` usa directamente `por_genero` para preguntas de conteo de hombres o mujeres, sin dejar esa cifra a estimación del LLM.
 6. El RAG permite preguntar por correo, celular, documento, edad y fecha de registro al indicar el nombre o documento de la persona; también responde conteos, género, promedio de edad, extremos, último registro, filtros por edad y verificación de registro. Dirección, ciudad y cargo/área no existen en el modelo actual: el asistente informa esa limitación y no infiere esos datos.
+   Si preguntan qué puede hacer, explica en pocas frases que consulta información por nombre o documento y ofrece respuestas o resúmenes; aclara que no crea, modifica ni elimina registros, sin mostrar datos de personas ni detalles internos.
 7. `Token de servicio` → `POST /api/v1/auth/service-token` con `X-Service-Key`; el JWT devuelto se usa como Bearer.
 8. `Registrar RAG_QUERY` → `POST /api/v1/logs` con `detalle: {pregunta, respuesta}`; `ms-logs` inserta en `transaccion_logs` y responde `201 Created`.
 9. `Respuesta al chat` devuelve el texto; se ve en el widget de n8n.
@@ -214,8 +215,8 @@ Pregunta de prueba oficial: *"¿Cuál es el empleado más joven que se ha regist
 **Configuración de la instancia n8n (2026-11-21):**
 - El owner se aprovisiona al arrancar con `N8N_INSTANCE_OWNER_MANAGED_BY_ENV=true` y `N8N_INSTANCE_OWNER_EMAIL=admin@proyecto.local` (el hash bcrypt se genera desde `N8N_PASSWORD` y se guarda escapando `$` como `$$` en `.env`). Así se evita el asistente inicial y se puede usar la API REST.
 - La credencial Postgres `gestion_personas` apunta a `postgres-db:5432/gestion_personas`, usuario `admin` y password el default de Compose (`POSTGRES_PASSWORD`, por defecto `admin123`). El campo `ssl` debe ser el string **`disable`** (no el booleano `false`), o n8n 2.x falla con `The server does not support SSL connections`.
-- El workflow se versiona en `n8n/workflows/rag_consulta_personas.json` con el placeholder `__POSTGRES_CREDENTIAL_ID__`; al importar se sustituye por el id real de la credencial (n8n CLI `import:workflow` + `publish:workflow`). Id observado en la instancia activa: `qNOg7qbLykYHNxen`, publicado/activo.
-- `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` es necesario porque los nodos Code leen `$env.OPENROUTER_*` (n8n 2.x lo bloquea por defecto).
+- El workflow se versiona en `n8n/workflows/rag_consulta_personas.json` con el placeholder `__POSTGRES_CREDENTIAL_ID__`. `n8n/init-data.sh` busca el ID de la credencial `gestion_personas`, sustituye el placeholder, importa y publica el workflow `qNOg7qbLykYHNxen`.
+- `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` permite que los nodos lean variables `$env.*` en n8n 2.x. Compose inyecta `OLLAMA_EMBED_MODEL`, `OLLAMA_EMBED_DIMENSIONS` y `OLLAMA_LLM_MODEL` en n8n, con valores predeterminados que coinciden con los modelos descargados.
 - El webhook real del chat es `/n8n/webhook/chat-rag-consulta-personas/chat` (el sufijo `/chat` lo añade el nodo Chat Trigger; la API de n8n lo registra en `webhook_entity`).
 - El gateway reescribe `/n8n/` con `proxy_pass http://n8n_service/;` (barra final) para que `/n8n/rest/...` llegue como `/rest/...`; sin ella la API REST caía en el HTML del editor.
 
@@ -291,7 +292,7 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 
 - [ ] R1 Autenticación ROBLE integrada (frontend conectado a login/registro y backend listo en `AUTH_MODE=mock`; pendiente validar ROBLE real con `ROBLE_CONTRACT_ID`)
 - [x] R2 CRUD completo + log de todas las transacciones (verificado por HTTP: `CREATE`/`READ`/`UPDATE`/`DELETE`)
-- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (workflow ampliado con consultas personales, agregados y filtros; las respuestas con registros reales requieren validación manual en n8n)
+- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (pregunta oficial y conteos de género probados; respuesta y auditoría verificadas)
 - [x] R4 Formulario con todos los campos (React Hook Form: identificación, nombres, nacimiento, género, correo, celular y foto opcional)
 - [x] R5 Validaciones en Zod y Pydantic (límites y reglas del formulario alineados con `backend/shared/schemas.py`)
 - [x] R6 Un microservicio por opción del menú
@@ -315,3 +316,10 @@ Formato: `AAAA-MM-DD — qué cambió — archivos/servicios afectados`
 - 2026-11-21 — SPA profesional conectada a auth, CRUD, consulta, auditoría y chat n8n; formularios Zod y estado de servicios — `frontend/`, `contexto.md` §4/§9.
 - 2026-11-21 — El RAG añade conteo exacto de personas y guía al LLM para no inferirlo desde coincidencias semánticas; se alinea el ID activo de la instancia — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§8.
 - 2026-11-22 — El RAG añade consultas por persona, estadísticas, filtros de edad y límites explícitos del esquema; prompts y SQL se separan en fragmentos legibles — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§8/§9.
+- 2026-11-22 — Migración del workflow RAG de n8n para usar Ollama local (`nomic-embed-text` y LLM) en sustitución de OpenRouter — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §10.
+- 2026-11-22 — Configuración de aceleración por GPU NVIDIA (CUDA) para el contenedor `ollama` en Docker Compose (`deploy.resources.reservations`), reduciendo la latencia de inferencia del modelo 7B de >120s a ~10s — `docker-compose.yml`, `contexto.md` §10.
+- 2026-11-22 — GPU NVIDIA desacoplada a `docker-compose.override.yml` e ignorada en `.gitignore` para permitir ejecución universal en CPU a colaboradores sin tarjeta gráfica dedicada — `docker-compose.yml`, `docker-compose.override.yml`, `.gitignore`, `contexto.md` §10.
+- 2026-11-22 — Se corrige la configuración RAG: Compose inyecta los modelos de Ollama en n8n y el script de importación resuelve la credencial PostgreSQL local antes de importar y publicar — `docker-compose.yml`, `n8n/workflows/rag_consulta_personas.json`, `n8n/init-data.sh`, `contexto.md` §4/§6/§10.
+- 2026-11-22 — Se verifica de extremo a extremo el chat RAG con la pregunta oficial y su registro `RAG_QUERY` — `n8n/`, `postgres-db`, `contexto.md` §6/§9/§10.
+- 2026-11-22 — Se ajustan las instrucciones del asistente para responder con naturalidad, explicar brevemente sus capacidades y limitar los datos personales a lo solicitado — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
+- 2026-11-22 — Se hacen deterministas los conteos de hombres y mujeres usando las categorías exactas agregadas desde la BD — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.

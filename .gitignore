@@ -1,5 +1,7 @@
 # VARIABLES DE ENTORNO Y SECRETOS
 .env
+docker-compose.override.yml
+docker-compose.override.*.yml
 *.pem
 *.key
 

@@ -13,30 +13,40 @@
       "name": "Chat Trigger",
       "type": "@n8n/n8n-nodes-langchain.chatTrigger",
       "typeVersion": 1.1,
-      "position": [-900, 300],
+      "position": [
+        -900,
+        300
+      ],
       "webhookId": "chat-rag-consulta-personas"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://openrouter.ai/api/v1/embeddings",
+        "url": "http://ollama:11434/v1/embeddings",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_EMBED_MODEL, input: $json.chatInput, dimensions: Number($env.OPENROUTER_EMBED_DIMENSIONS) }) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_EMBED_MODEL, input: 'search_query: ' + $json.chatInput, dimensions: Number($env.OLLAMA_EMBED_DIMENSIONS) }) }}",
+        "options": {
+          "timeout": 120000
+        }
       },
       "id": "a1000000-0000-4000-8000-000000000002",
       "name": "Embed pregunta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-660, 300]
+      "position": [
+        -660,
+        300
+      ]
     },
     {
       "parameters": {
@@ -46,7 +56,10 @@
       "name": "SQL vectorial",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-420, 300]
+      "position": [
+        -420,
+        300
+      ]
     },
     {
       "parameters": {
@@ -58,7 +71,10 @@
       "name": "Buscar similares",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [-180, 300],
+      "position": [
+        -180,
+        300
+      ],
       "credentials": {
         "postgres": {
           "id": "__POSTGRES_CREDENTIAL_ID__",
@@ -74,7 +90,10 @@
       "name": "Preparar consulta",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [60, 300]
+      "position": [
+        60,
+        300
+      ]
     },
     {
       "parameters": {
@@ -84,7 +103,10 @@
       "name": "Ajustar consulta",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [180, 300]
+      "position": [
+        180,
+        300
+      ]
     },
     {
       "parameters": {
@@ -382,7 +404,10 @@
       "name": "Fragmentos SQL",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [300, 540]
+      "position": [
+        300,
+        540
+      ]
     },
     {
       "parameters": {
@@ -392,7 +417,10 @@
       "name": "Construir SQL agregado",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [540, 540]
+      "position": [
+        540,
+        540
+      ]
     },
     {
       "parameters": {
@@ -406,7 +434,10 @@
       "name": "Agregados",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [780, 300],
+      "position": [
+        780,
+        300
+      ],
       "credentials": {
         "postgres": {
           "id": "__POSTGRES_CREDENTIAL_ID__",
@@ -422,7 +453,10 @@
       "name": "Armar contexto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1020, 300]
+      "position": [
+        1020,
+        300
+      ]
     },
     {
       "parameters": {
@@ -432,19 +466,19 @@
             {
               "id": "prompt-01",
               "name": "prompt_01",
-              "value": "Eres un asistente de gestión de datos personales. Responde en español, breve y claro.",
+              "value": "Eres un asistente de gestión de datos personales. Responde en español con un tono natural, amable y directo.",
               "type": "string"
             },
             {
               "id": "prompt-02",
               "name": "prompt_02",
-              "value": "Usa solo el contexto de la base de datos. No inventes ni completes datos ausentes.",
+              "value": "Para preguntas sobre personas, usa solo el contexto. No inventes ni completes datos ausentes. Para preguntas sobre tus funciones, sigue prompt_12.",
               "type": "string"
             },
             {
               "id": "prompt-03",
               "name": "prompt_03",
-              "value": "Total: agregados.total_personas. Género: agregados.por_genero. Promedio: agregados.promedio_edad.",
+              "value": "Para género usa la cantidad exacta de cada clave en agregados.por_genero. Nunca uses total_personas como conteo de hombres o mujeres.",
               "type": "string"
             },
             {
@@ -482,6 +516,24 @@
               "name": "prompt_09",
               "value": "Las coincidencias semánticas son auxiliares; no las uses para conteos ni para confirmar identidad.",
               "type": "string"
+            },
+            {
+              "id": "prompt-10",
+              "name": "prompt_10",
+              "value": "Responde primero a lo preguntado en 1 a 3 frases. No repitas la pregunta ni describas el proceso.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-11",
+              "name": "prompt_11",
+              "value": "Incluye solo datos pertinentes y solicitados. No menciones detalles técnicos o internos salvo que te los pidan.",
+              "type": "string"
+            },
+            {
+              "id": "prompt-12",
+              "name": "prompt_12",
+              "value": "Si preguntan qué puedes hacer o cómo puedes ayudar, responde brevemente: Puedo consultar información registrada por nombre o documento, responder preguntas sobre edades y fechas, y ofrecer conteos o resúmenes. No puedo crear, modificar ni eliminar registros. ¿Qué te gustaría consultar?",
+              "type": "string"
             }
           ]
         },
@@ -492,51 +544,52 @@
       "name": "Instrucciones",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [1260, 300]
+      "position": [
+        1260,
+        300
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "url": "http://ollama:11434/v1/chat/completions",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $env.OPENROUTER_LLM_MODEL, messages: [ { role: 'system', content: Object.keys($json).filter((key) => key.startsWith('prompt_')).sort().map((key) => $json[key]).join('\\n') }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ] }) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_LLM_MODEL, messages: [ { role: 'system', content: Object.keys($json).filter((key) => key.startsWith('prompt_')).sort().map((key) => $json[key]).join('\\n') }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ], temperature: 0 }) }}",
+        "options": {
+          "timeout": 120000
+        }
       },
       "id": "a1000000-0000-4000-8000-000000000007",
-      "name": "LLM OpenRouter",
+      "name": "LLM Ollama",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1500, 300]
+      "position": [
+        1500,
+        300
+      ]
     },
     {
       "parameters": {
-        "mode": "manual",
-        "assignments": {
-          "assignments": [
-            {
-              "id": "asg-texto-respuesta",
-              "name": "texto",
-              "value": "={{ $json.choices[0].message.content }}",
-              "type": "string"
-            }
-          ]
-        },
-        "includeOtherFields": false,
-        "options": {}
+        "jsCode": "const respuestaModelo = String($json.choices[0].message.content || '').trim();\nconst pregunta = $('Armar contexto').first().json.pregunta.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\nconst agregados = $('Agregados').first().json;\nconst porGenero = typeof agregados.por_genero === 'string' ? JSON.parse(agregados.por_genero) : (agregados.por_genero || {});\nconst pideConteo = /\\b(cuant[oa]s?|cantidad|total|conteo|numero|porcentaje|proporcion)\\b/.test(pregunta);\nconst pideMujeres = /\\b(mujer(?:es)?|femenin[oa]s?)\\b/.test(pregunta);\nconst pideHombres = /\\b(hombre(?:s)?|masculin[oa]s?)\\b/.test(pregunta);\nconst cantidadDe = (genero) => {\n  const clave = Object.keys(porGenero).find((valor) => valor.trim().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase() === genero);\n  return Number(clave ? porGenero[clave] : 0);\n};\nif (pideConteo && (pideMujeres || pideHombres)) {\n  const partes = [];\n  if (pideMujeres) {\n    const cantidad = cantidadDe('femenino');\n    partes.push(`${cantidad} ${cantidad === 1 ? 'mujer' : 'mujeres'} registrada${cantidad === 1 ? '' : 's'}`);\n  }\n  if (pideHombres) {\n    const cantidad = cantidadDe('masculino');\n    partes.push(`${cantidad} ${cantidad === 1 ? 'hombre' : 'hombres'} registrado${cantidad === 1 ? '' : 's'}`);\n  }\n  return [{ json: { texto: `Hay ${partes.join(' y ')}.` } }];\n}\nreturn [{ json: { texto: respuestaModelo } }];"
       },
       "id": "a1000000-0000-4000-8000-000000000008",
       "name": "Preparar respuesta",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [1740, 300]
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        300
+      ]
     },
     {
       "parameters": {
@@ -545,7 +598,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "X-Service-Key", "value": "={{ $env.SERVICE_API_KEY }}" }
+            {
+              "name": "X-Service-Key",
+              "value": "={{ $env.SERVICE_API_KEY }}"
+            }
           ]
         },
         "options": {}
@@ -554,7 +610,10 @@
       "name": "Token de servicio",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1980, 300]
+      "position": [
+        1980,
+        300
+      ]
     },
     {
       "parameters": {
@@ -563,8 +622,14 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "=Bearer {{ $json.access_token }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -576,7 +641,10 @@
       "name": "Registrar RAG_QUERY",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2220, 300]
+      "position": [
+        2220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -598,54 +666,177 @@
       "name": "Respuesta al chat",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [2460, 300]
+      "position": [
+        2460,
+        300
+      ]
     }
   ],
   "connections": {
     "Chat Trigger": {
-      "main": [[{ "node": "Embed pregunta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Embed pregunta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Embed pregunta": {
-      "main": [[{ "node": "SQL vectorial", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "SQL vectorial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "SQL vectorial": {
-      "main": [[{ "node": "Buscar similares", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Buscar similares",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Buscar similares": {
-      "main": [[{ "node": "Preparar consulta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Preparar consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Preparar consulta": {
-      "main": [[{ "node": "Ajustar consulta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Ajustar consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Ajustar consulta": {
-      "main": [[{ "node": "Fragmentos SQL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Fragmentos SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Fragmentos SQL": {
-      "main": [[{ "node": "Construir SQL agregado", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Construir SQL agregado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Construir SQL agregado": {
-      "main": [[{ "node": "Agregados", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Agregados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Agregados": {
-      "main": [[{ "node": "Armar contexto", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Armar contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Armar contexto": {
-      "main": [[{ "node": "Instrucciones", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Instrucciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Instrucciones": {
-      "main": [[{ "node": "LLM OpenRouter", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "LLM Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "LLM OpenRouter": {
-      "main": [[{ "node": "Preparar respuesta", "type": "main", "index": 0 }]]
+    "LLM Ollama": {
+      "main": [
+        [
+          {
+            "node": "Preparar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Preparar respuesta": {
-      "main": [[{ "node": "Token de servicio", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Token de servicio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Token de servicio": {
-      "main": [[{ "node": "Registrar RAG_QUERY", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Registrar RAG_QUERY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Registrar RAG_QUERY": {
-      "main": [[{ "node": "Respuesta al chat", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respuesta al chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
