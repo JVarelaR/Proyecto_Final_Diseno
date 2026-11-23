@@ -1,5 +1,4 @@
 {
-  "id": "KTgajEBwgIVpKDRy",
   "name": "RAG - Consulta de Personas",
   "nodes": [
     {
@@ -9,11 +8,14 @@
           "responseMode": "lastNode"
         }
       },
-      "id": "a1000000-0000-4000-8000-000000000001",
+      "id": "bb2993b2-5f79-43a0-bbd6-24c876342b23",
       "name": "Chat Trigger",
       "type": "@n8n/n8n-nodes-langchain.chatTrigger",
       "typeVersion": 1.1,
-      "position": [-900, 300],
+      "position": [
+        0,
+        0
+      ],
       "webhookId": "chat-rag-consulta-personas"
     },
     {
@@ -23,75 +25,96 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_EMBED_MODEL, input: 'search_query: ' + $json.chatInput, dimensions: Number($env.OLLAMA_EMBED_DIMENSIONS) }) }}",
-        "options": { "timeout": 120000 }
+        "options": {
+          "timeout": 120000
+        }
       },
-      "id": "a1000000-0000-4000-8000-000000000002",
+      "id": "fa59336b-3b53-465d-bdc5-3a88216b2b92",
       "name": "Embed pregunta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-660, 300]
+      "position": [
+        240,
+        0
+      ]
     },
     {
       "parameters": {
         "jsCode": "const vector = $json.data[0].embedding;\nconst literal = '[' + vector.join(',') + ']';\nconst sql = \"SELECT p.numero_documento, p.primer_nombre, p.segundo_nombre, p.apellidos, p.fecha_nacimiento, 1 - (pe.embedding <=> '\" + literal + \"'::vector) AS similitud FROM persona_embeddings pe JOIN personas p ON p.numero_documento = pe.numero_documento ORDER BY pe.embedding <=> '\" + literal + \"'::vector LIMIT 5\";\nreturn [{ json: { sql } }];"
       },
-      "id": "a1000000-0000-4000-8000-000000000003",
+      "id": "3d4d29ce-cf3b-4a30-ab0f-5105872c60de",
       "name": "SQL vectorial",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-420, 300]
+      "position": [
+        480,
+        0
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "={{ $json.sql }}",
+        "query": "{{ $json.sql }}",
         "options": {}
       },
-      "id": "a1000000-0000-4000-8000-000000000004",
+      "id": "5c522ff9-ecd8-41a4-823c-f0b77549db64",
       "name": "Buscar similares",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [-180, 300],
+      "position": [
+        720,
+        0
+      ],
       "credentials": {
         "postgres": {
-          "id": "__POSTGRES_CREDENTIAL_ID__",
-          "name": "gestion_personas"
+          "id": "gbfREeZH2VYQxSiu",
+          "name": "Postgres account"
         }
       }
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "(SELECT 'mas_joven' AS tipo, primer_nombre, segundo_nombre, apellidos, fecha_nacimiento FROM personas ORDER BY fecha_nacimiento DESC LIMIT 1) UNION ALL (SELECT 'mas_mayor' AS tipo, primer_nombre, segundo_nombre, apellidos, fecha_nacimiento FROM personas ORDER BY fecha_nacimiento ASC LIMIT 1)",
+        "query": "\nWITH total AS MATERIALIZED (\n    SELECT COUNT(*)::integer AS total_personas\n    FROM personas\n),\nextremos AS (\n    (\n        SELECT\n            'mas_joven' AS tipo,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento DESC NULLS LAST\n        LIMIT 1\n    )\n\n    UNION ALL\n\n    (\n        SELECT\n            'mas_mayor' AS tipo,\n            primer_nombre,\n            segundo_nombre,\n            apellidos,\n            fecha_nacimiento\n        FROM personas\n        ORDER BY fecha_nacimiento ASC NULLS LAST\n        LIMIT 1\n    )\n)\nSELECT\n    e.tipo,\n    e.primer_nombre,\n    e.segundo_nombre,\n    e.apellidos,\n    e.fecha_nacimiento,\n    t.total_personas\nFROM extremos AS e\nCROSS JOIN total AS t;\n",
         "options": {}
       },
-      "id": "a1000000-0000-4000-8000-000000000005",
+      "id": "83d2b092-430f-42a7-aa29-115239fd0ec9",
       "name": "Agregados",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [60, 300],
+      "position": [
+        960,
+        0
+      ],
+      "executeOnce": true,
       "credentials": {
         "postgres": {
-          "id": "__POSTGRES_CREDENTIAL_ID__",
-          "name": "gestion_personas"
+          "id": "gbfREeZH2VYQxSiu",
+          "name": "Postgres account"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "const pregunta = $('Chat Trigger').first().json.chatInput;\nconst similares = $('Buscar similares').all().map((item) => { const { similitud, ...persona } = item.json; return persona; });\nconst agregados = $('Agregados').all().map((item) => item.json);\nconst masJoven = agregados.find((item) => item.tipo === 'mas_joven');\nconst nombreMasJoven = masJoven ? [masJoven.primer_nombre, masJoven.segundo_nombre, masJoven.apellidos].filter(Boolean).join(' ') : '';\nconst contexto = JSON.stringify({ similares, nombre_mas_joven: nombreMasJoven, agregados }, null, 2);\nreturn [{ json: { pregunta, contexto } }];"
+        "jsCode": "const chat = $('Chat Trigger').first().json;\n\nconst pregunta = chat.chatInput || '';\nconst sessionId = chat.sessionId || '';\n\n// Personas recuperadas mediante búsqueda vectorial\nconst similares = $('Buscar similares').all().map(item => {\n  const { similitud, ...persona } = item.json;\n  return persona;\n});\n\n// Resultados de las consultas SQL de agregación\nconst agregados = $('Agregados').all().map(item => item.json);\n\n// Persona más joven\nconst masJoven = agregados.find(\n  item => item.tipo === 'mas_joven'\n);\n\n// Persona de mayor edad\nconst masMayor = agregados.find(\n  item => item.tipo === 'mas_mayor'\n);\n\nfunction nombreCompleto(persona) {\n  if (!persona) return null;\n\n  return [\n    persona.primer_nombre,\n    persona.segundo_nombre,\n    persona.apellidos\n  ].filter(Boolean).join(' ');\n}\n\n// Cantidad real de personas registrada en PostgreSQL\nconst totalPersonas =\n  agregados.length > 0 &&\n  agregados[0].total_personas != null\n    ? Number(agregados[0].total_personas)\n    : null;\n\n// Contexto estructurado para Ollama\nconst datosContexto = {\n  total_personas: totalPersonas,\n\n  nombre_mas_joven: nombreCompleto(masJoven),\n\n  nombre_mas_mayor: nombreCompleto(masMayor),\n\n  persona_mas_joven: masJoven || null,\n\n  persona_mas_mayor: masMayor || null,\n\n  similares\n};\n\nconst contexto = JSON.stringify(datosContexto, null, 2);\n\nreturn [{\n  json: {\n    pregunta,\n    sessionId,\n    total_personas: totalPersonas,\n    contexto\n  }\n}];"
       },
-      "id": "a1000000-0000-4000-8000-000000000006",
+      "id": "a9454135-227d-4e6a-ae10-036de61c2e55",
       "name": "Armar contexto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [300, 300]
+      "position": [
+        1200,
+        0
+      ]
     },
     {
       "parameters": {
@@ -100,23 +123,30 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $env.OLLAMA_LLM_MODEL, messages: [ { role: 'system', content: 'Eres un asistente de gestión de datos personales. Responde en español, de forma breve y usando SOLO el contexto proporcionado. Cuando la pregunta pida identificar a una persona, responde únicamente con nombre_mas_joven si existe; si no, con el nombre completo usando primer_nombre y apellidos. No expliques, no repitas fechas y no menciones el campo similitud ni valores de distancia. Si el contexto no contiene la respuesta, di que no hay información suficiente.' }, { role: 'user', content: 'Pregunta: ' + $json.pregunta + '\\nContexto: ' + $json.contexto } ], temperature: 0 }) }}",
-        "options": { "timeout": 120000 }
+        "jsonBody": "=\n{{ JSON.stringify({\n  model: $env.OLLAMA_LLM_MODEL,\n  messages: [\n    {\n      role: 'system',\n      content: `Eres un asistente de consulta de datos personales.\n\nREGLAS:\n1. Responde siempre en español, de forma clara y precisa.\n2. Utiliza únicamente la información del contexto proporcionado.\n3. Identifica a la persona mencionada en la pregunta antes de responder.\n4. No confundas los datos de distintas personas.\n5. Si preguntan por una persona, proporciona únicamente los datos solicitados.\n6. Si preguntan por una fecha de nacimiento, utiliza fecha_nacimiento.\n7. Si preguntan por la persona más joven, utiliza nombre_mas_joven cuando esté disponible.\n8. Si preguntan por la persona de mayor edad, utiliza los datos de tipo mas_mayor.\n9. Si preguntan cuántas personas existen, no confundas la cantidad de resultados similares con el total de registros.\n10. Si la pregunta hace referencia a una persona mencionada anteriormente y el contexto no permite identificarla, solicita una aclaración.\n11. No inventes información ni utilices datos de personas que no correspondan a la pregunta.\n12. No muestres identificadores personales completos salvo que la solicitud esté autorizada y el sistema haya verificado ese permiso.\n13. No menciones similitudes vectoriales ni detalles técnicos innecesarios.\n14. Si falta información para responder, indícalo brevemente.\n\nResponde exclusivamente a la pregunta del usuario.`\n    },\n    {\n      role: 'user',\n      content: 'Pregunta: ' + $json.pregunta +\n               '\\nContexto: ' + $json.contexto\n    }\n  ],\n  temperature: 0\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
       },
-      "id": "a1000000-0000-4000-8000-000000000007",
+      "id": "4220ea6f-6b89-4152-adf8-f3582039b597",
       "name": "LLM Ollama",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [540, 300]
+      "position": [
+        1440,
+        0
+      ]
     },
     {
       "parameters": {
-        "mode": "manual",
         "assignments": {
           "assignments": [
             {
@@ -127,14 +157,16 @@
             }
           ]
         },
-        "includeOtherFields": false,
         "options": {}
       },
-      "id": "a1000000-0000-4000-8000-000000000008",
+      "id": "82c1b2c4-2793-475c-af42-83333f388b09",
       "name": "Preparar respuesta",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [780, 300]
+      "position": [
+        1680,
+        0
+      ]
     },
     {
       "parameters": {
@@ -143,16 +175,22 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "X-Service-Key", "value": "={{ $env.SERVICE_API_KEY }}" }
+            {
+              "name": "X-Service-Key",
+              "value": "={{ $env.SERVICE_API_KEY }}"
+            }
           ]
         },
         "options": {}
       },
-      "id": "a1000000-0000-4000-8000-000000000009",
+      "id": "ff253c39-1472-429e-8e94-64979be29f01",
       "name": "Token de servicio",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1020, 300]
+      "position": [
+        1920,
+        0
+      ]
     },
     {
       "parameters": {
@@ -161,8 +199,14 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "=Bearer {{ $json.access_token }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -170,15 +214,17 @@
         "jsonBody": "={{ JSON.stringify({ tipo_transaccion: 'RAG_QUERY', detalle: { pregunta: $('Armar contexto').first().json.pregunta, respuesta: $('Preparar respuesta').first().json.texto } }) }}",
         "options": {}
       },
-      "id": "a1000000-0000-4000-8000-000000000010",
+      "id": "4f500305-2ff1-4bbd-90bf-ed6cd0a9bca5",
       "name": "Registrar RAG_QUERY",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1260, 300]
+      "position": [
+        2160,
+        0
+      ]
     },
     {
       "parameters": {
-        "mode": "manual",
         "assignments": {
           "assignments": [
             {
@@ -189,51 +235,142 @@
             }
           ]
         },
-        "includeOtherFields": false,
         "options": {}
       },
-      "id": "a1000000-0000-4000-8000-000000000011",
+      "id": "1818caa1-8904-4dc5-8a4c-cda3c9c85216",
       "name": "Respuesta al chat",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [1500, 300]
+      "position": [
+        2400,
+        0
+      ]
     }
   ],
+  "pinData": {},
   "connections": {
     "Chat Trigger": {
-      "main": [[{ "node": "Embed pregunta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Embed pregunta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Embed pregunta": {
-      "main": [[{ "node": "SQL vectorial", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "SQL vectorial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "SQL vectorial": {
-      "main": [[{ "node": "Buscar similares", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Buscar similares",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Buscar similares": {
-      "main": [[{ "node": "Agregados", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Agregados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Agregados": {
-      "main": [[{ "node": "Armar contexto", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Armar contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Armar contexto": {
-      "main": [[{ "node": "LLM Ollama", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "LLM Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "LLM Ollama": {
-      "main": [[{ "node": "Preparar respuesta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Preparar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Preparar respuesta": {
-      "main": [[{ "node": "Token de servicio", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Token de servicio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Token de servicio": {
-      "main": [[{ "node": "Registrar RAG_QUERY", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Registrar RAG_QUERY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Registrar RAG_QUERY": {
-      "main": [[{ "node": "Respuesta al chat", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respuesta al chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
-  "pinData": {}
+  "versionId": "43d0596a-719c-444c-8d05-2dd32cb38128",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b50f52de79c34c8b0bfebcc8bb088aa13062cd36d48fba9230ea9c2f0bc714c"
+  },
+  "nodeGroups": [],
+  "id": "J1TMlq4JTuB1dRfy",
+  "tags": []
 }
