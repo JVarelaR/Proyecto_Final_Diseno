@@ -203,8 +203,9 @@ La crea Alembic. Solo la usa `shared/roble_storage.py` cuando `AUTH_MODE=roble` 
 2. `Embed pregunta` → Ollama `/v1/embeddings` con `OLLAMA_EMBED_MODEL` y `OLLAMA_EMBED_DIMENSIONS`, iguales a los usados en la indexación.
 3. `Buscar similares` → SQL con distancia coseno: `ORDER BY pe.embedding <=> '<vector>'::vector LIMIT 5`. Estas coincidencias son contexto auxiliar, no una fuente para conteos ni para confirmar identidad.
 4. `Preparar consulta` extrae de forma acotada un nombre/documento, un filtro de edad y campos no disponibles. `Agregados` usa parámetros SQL enlazados para consultar el total, conteos por género, promedio de edad, persona más joven/mayor, último registro, coincidencias exactas y hasta 20 resultados filtrados por edad.
-5. `Armar contexto` entrega los resultados agregados y semánticos; `Instrucciones` arma reglas cortas en campos separados para mantener legible el JSON. `LLM Ollama` responde desde los resultados SQL y no estima usando el top-5.
+5. `Armar contexto` entrega los resultados agregados y semánticos; `Instrucciones` arma reglas en campos separados. `LLM Ollama` responde desde los resultados SQL, con tono natural y breve, sin detallar el proceso ni revelar datos personales no solicitados. `Preparar respuesta` usa directamente `por_genero` para preguntas de conteo de hombres o mujeres, sin dejar esa cifra a estimación del LLM.
 6. El RAG permite preguntar por correo, celular, documento, edad y fecha de registro al indicar el nombre o documento de la persona; también responde conteos, género, promedio de edad, extremos, último registro, filtros por edad y verificación de registro. Dirección, ciudad y cargo/área no existen en el modelo actual: el asistente informa esa limitación y no infiere esos datos.
+   Si preguntan qué puede hacer, explica en pocas frases que consulta información por nombre o documento y ofrece respuestas o resúmenes; aclara que no crea, modifica ni elimina registros, sin mostrar datos de personas ni detalles internos.
 7. `Token de servicio` → `POST /api/v1/auth/service-token` con `X-Service-Key`; el JWT devuelto se usa como Bearer.
 8. `Registrar RAG_QUERY` → `POST /api/v1/logs` con `detalle: {pregunta, respuesta}`; `ms-logs` inserta en `transaccion_logs` y responde `201 Created`.
 9. `Respuesta al chat` devuelve el texto; se ve en el widget de n8n.
@@ -291,7 +292,7 @@ Resolver y registrar la decisión tomada en el registro de cambios.
 
 - [ ] R1 Autenticación ROBLE integrada (frontend conectado a login/registro y backend listo en `AUTH_MODE=mock`; pendiente validar ROBLE real con `ROBLE_CONTRACT_ID`)
 - [x] R2 CRUD completo + log de todas las transacciones (verificado por HTTP: `CREATE`/`READ`/`UPDATE`/`DELETE`)
-- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (pregunta oficial probada después de corregir las variables de Ollama y la credencial PostgreSQL; respuesta y auditoría verificadas)
+- [x] R3 RAG funcionando en el chat de n8n + log `RAG_QUERY` (pregunta oficial y conteos de género probados; respuesta y auditoría verificadas)
 - [x] R4 Formulario con todos los campos (React Hook Form: identificación, nombres, nacimiento, género, correo, celular y foto opcional)
 - [x] R5 Validaciones en Zod y Pydantic (límites y reglas del formulario alineados con `backend/shared/schemas.py`)
 - [x] R6 Un microservicio por opción del menú
@@ -320,3 +321,5 @@ Formato: `AAAA-MM-DD — qué cambió — archivos/servicios afectados`
 - 2026-11-22 — GPU NVIDIA desacoplada a `docker-compose.override.yml` e ignorada en `.gitignore` para permitir ejecución universal en CPU a colaboradores sin tarjeta gráfica dedicada — `docker-compose.yml`, `docker-compose.override.yml`, `.gitignore`, `contexto.md` §10.
 - 2026-11-22 — Se corrige la configuración RAG: Compose inyecta los modelos de Ollama en n8n y el script de importación resuelve la credencial PostgreSQL local antes de importar y publicar — `docker-compose.yml`, `n8n/workflows/rag_consulta_personas.json`, `n8n/init-data.sh`, `contexto.md` §4/§6/§10.
 - 2026-11-22 — Se verifica de extremo a extremo el chat RAG con la pregunta oficial y su registro `RAG_QUERY` — `n8n/`, `postgres-db`, `contexto.md` §6/§9/§10.
+- 2026-11-22 — Se ajustan las instrucciones del asistente para responder con naturalidad, explicar brevemente sus capacidades y limitar los datos personales a lo solicitado — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
+- 2026-11-22 — Se hacen deterministas los conteos de hombres y mujeres usando las categorías exactas agregadas desde la BD — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
