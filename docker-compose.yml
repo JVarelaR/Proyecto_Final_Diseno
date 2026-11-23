@@ -1,4 +1,4 @@
-# Orquestación de todos los contenedores. `docker compose up -d --build` levanta
+# OrquestaciÃ³n de todos los contenedores. `docker compose up -d --build` levanta
 # el sistema completo; cada `service` es un contenedor con su propia imagen.
 # Las dependencias con `condition` garantizan que las migraciones terminen
 # antes de que los microservicios empiecen a consultar las tablas.
@@ -52,8 +52,8 @@ services:
     networks:
       - app-network
 
-  # Descarga única de los dos modelos. create/update y n8n esperan a que
-  # termine; si el volumen ya los tiene, el `pull` es casi instantáneo.
+  # Descarga Ãºnica de los dos modelos. create/update y n8n esperan a que
+  # termine; si el volumen ya los tiene, el `pull` es casi instantÃ¡neo.
   ollama-pull:
     image: ollama/ollama:latest
     container_name: ollama-pull
@@ -77,7 +77,7 @@ services:
       context: ./backend
       dockerfile: ms-person-create/Dockerfile
     container_name: db-migrate
-    # Contenedor de un solo uso: aplica la migración inicial y termina.
+    # Contenedor de un solo uso: aplica la migraciÃ³n inicial y termina.
     command: ["alembic", "upgrade", "head"]
     env_file: .env
     environment:
@@ -88,7 +88,7 @@ services:
     networks:
       - app-network
 
-  # 3. AUTENTICACIÓN SSO ROBLE (o modo mock)
+  # 3. AUTENTICACIÃ“N SSO ROBLE (o modo mock)
   ms-auth:
     build:
       context: ./backend
@@ -187,7 +187,7 @@ services:
       context: ./backend
       dockerfile: ms-person-query/Dockerfile
     container_name: ms-person-query
-    # Sin restart automático: se enciende/apaga manualmente (prueba de R7).
+    # Sin restart automÃ¡tico: se enciende/apaga manualmente (prueba de R7).
     env_file: .env
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://admin:admin123@postgres-db:5432/gestion_personas}
@@ -203,7 +203,26 @@ services:
     networks:
       - app-network
 
-  # 6. MICROSERVICIO DE AUDITORÍA Y LOGS
+  # 5b. MICROSERVICIO RAG AUTENTICADO
+  ms-rag:
+    build:
+      context: ./backend
+      dockerfile: ms-rag/Dockerfile
+    container_name: ms-rag
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AUTH_SERVICE_URL: http://ms-auth:8000
+      N8N_INTERNAL_URL: http://n8n:5678
+    depends_on:
+      ms-auth:
+        condition: service_started
+      n8n:
+        condition: service_started
+    networks:
+      - app-network
+
+  # 6. MICROSERVICIO DE AUDITORÃA Y LOGS
   ms-logs:
     build:
       context: ./backend
@@ -222,19 +241,20 @@ services:
     networks:
       - app-network
 
-  # 7. AUTOMATIZACIÓN & RAG (n8n Self-Hosted)
+  # 7. AUTOMATIZACIÃ“N & RAG (n8n Self-Hosted)
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     container_name: n8n
     restart: unless-stopped
     # No se expone el puerto 5678: todo el acceso pasa por el gateway (/n8n/),
-    # donde se aplica basic auth. Así no se puede eludir la protección.
+    # donde se aplica basic auth. AsÃ­ no se puede eludir la protecciÃ³n.
     env_file: .env
     environment:
       N8N_HOST: ${N8N_HOST:-localhost}
       N8N_PORT: 5678
       N8N_PROTOCOL: http
       N8N_PATH: /n8n/
+      N8N_PROXY_HOPS: "1"
       WEBHOOK_URL: http://localhost/n8n/
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-America/Bogota}
       # Metadatos de n8n en su propia BD; los datos de personas se consultan
@@ -256,7 +276,7 @@ services:
     networks:
       - app-network
 
-  # 8. FRONTEND (React + Vite) — perfil `ui`, no requerido para el backend
+  # 8. FRONTEND (React + Vite) â€” perfil `ui`, no requerido para el backend
   frontend:
     # Con `profiles`, no arranca en el `up` normal; se activa con
     # `docker compose --profile ui up frontend` (ver @no_ui en nginx.conf).
@@ -282,7 +302,7 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-    env_file: .env   # N8N_USER / N8N_PASSWORD → htpasswd del entrypoint
+    env_file: .env   # N8N_USER / N8N_PASSWORD â†’ htpasswd del entrypoint
     volumes:
       - uploads_data:/usr/share/nginx/html/uploads:ro
     depends_on:
@@ -291,6 +311,7 @@ services:
       - ms-person-update
       - ms-person-delete
       - ms-logs
+      - ms-rag
       - n8n
     networks:
       - app-network
