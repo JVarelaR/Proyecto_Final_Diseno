@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowUpRight, ImagePlus, Save, UserRoundPlus } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
@@ -68,9 +68,20 @@ export default function PersonEditor({
 
   const numeroDocumento = watch("numero_documento");
   const fotoSeleccionada = watch("foto");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const onSubmit = async (values: PersonaFormValues) => {
+    await onSave(values);
+    if (mode === "create") {
+      reset(EMPTY_PERSON);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
 
   return (
-    <form className="person-form" onSubmit={handleSubmit(onSave)} noValidate>
+    <form className="person-form" onSubmit={handleSubmit(onSubmit)} noValidate>
       <div className="form-section">
         <div className="form-section__title">
           <span className="form-section__number">01</span>
@@ -169,7 +180,10 @@ export default function PersonEditor({
             name="foto"
             render={({ field: { onChange, ref, name } }) => (
               <input
-                ref={ref}
+                ref={(element) => {
+                  ref(element);
+                  fileInputRef.current = element;
+                }}
                 name={name}
                 type="file"
                 accept="image/*"

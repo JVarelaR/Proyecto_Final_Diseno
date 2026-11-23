@@ -3,7 +3,7 @@
 > **Fuente de verdad del proyecto.** Este archivo resume el enunciado oficial, la rúbrica, las decisiones de diseño del equipo y la guía de integración con ROBLE.
 > **Regla de mantenimiento:** si cambia cualquier cosa del proyecto (arquitectura, contenedores, rutas, tablas, validaciones, stack, estado de avance, decisiones), el agente DEBE actualizar este archivo en la misma tarea. Ver sección 9 (Registro de cambios).
 
-Última actualización: 2026-11-22
+Última actualización: 2026-11-23
 
 ---
 
@@ -323,3 +323,7 @@ Formato: `AAAA-MM-DD — qué cambió — archivos/servicios afectados`
 - 2026-11-22 — Se verifica de extremo a extremo el chat RAG con la pregunta oficial y su registro `RAG_QUERY` — `n8n/`, `postgres-db`, `contexto.md` §6/§9/§10.
 - 2026-11-22 — Se ajustan las instrucciones del asistente para responder con naturalidad, explicar brevemente sus capacidades y limitar los datos personales a lo solicitado — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
 - 2026-11-22 — Se hacen deterministas los conteos de hombres y mujeres usando las categorías exactas agregadas desde la BD — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
+- 2026-11-23 — Limpieza automática de todos los campos y selector de fotografía tras registrar exitosamente a una persona — `frontend/src/components/PersonEditor.tsx`, `contexto.md` §10.
+- 2026-11-23 — Desactivación de workflow obsoleto y publicación en n8n de la versión completa del RAG (`qNOg7qbLykYHNxen`, 16 nodos) con resolución de edad, agregados y vinculación a credencial PostgreSQL local — `n8n/`, `contexto.md` §6/§10.
+- 2026-11-23 — Mejoras integrales al RAG en n8n: inclusión de todas las columnas (excepto foto), agregados exactos por tipo de documento y mayoría de edad (Cédula/Tarjeta), búsqueda de nombres por subpalabras y prompts refinados para respuestas directas sin narrar procesos internos — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
+- 2026-11-23 — Eliminación de información no solicitada en respuestas del RAG: prompts estrictos de concisión (sin ejemplos de emails reales ni narración interna), respuesta simétrica para persona mayor y menor (nombre y edad), y sanitización en nodo de salida — `n8n/workflows/rag_consulta_personas.json`, `contexto.md` §6/§10.
